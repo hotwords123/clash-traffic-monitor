@@ -45,9 +45,10 @@ type RankedItem struct {
 }
 
 type TimePoint struct {
-	Time     int64 `json:"time"`
-	Upload   int64 `json:"upload"`
-	Download int64 `json:"download"`
+	Time            int64 `json:"time"`
+	Upload          int64 `json:"upload"`
+	Download        int64 `json:"download"`
+	ObservedMinutes int64 `json:"observed_minutes"`
 }
 
 func Open(path string) (*Store, error) {
@@ -260,12 +261,18 @@ GROUP BY %s ORDER BY SUM(upload + download) DESC, %s LIMIT ? OFFSET ?`, column, 
 	return items, nil
 }
 
+// Series groups into fixed-size buckets anchored to the display start.
+// Only observed buckets are returned, so the UI can keep missing intervals empty.
 func (s *Store) Series(ctx context.Context, since time.Time, filters ...Filter) ([]TimePoint, error) {
 	where, args := conditions(since, "bucket", filters...)
+	step := int64(60)
+	if len(filters) > 0 && filters[0].BucketSeconds > 0 {
+		step = filters[0].BucketSeconds
+	}
+	args = append([]any{since.Unix(), since.Unix(), step, step}, args...)
 	rows, err := s.db.QueryContext(ctx, `
-SELECT bucket, SUM(upload), SUM(download)
-FROM traffic_minute WHERE `+where+`
-GROUP BY bucket ORDER BY bucket`, args...)
+SELECT (? + ((bucket - ?) / ?) * ?) AS time_bucket, SUM(upload), SUM(download), COUNT(DISTINCT bucket)
+FROM traffic_minute WHERE `+where+` GROUP BY time_bucket ORDER BY time_bucket`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +280,7 @@ GROUP BY bucket ORDER BY bucket`, args...)
 	points := make([]TimePoint, 0)
 	for rows.Next() {
 		var point TimePoint
-		if err := rows.Scan(&point.Time, &point.Upload, &point.Download); err != nil {
+		if err := rows.Scan(&point.Time, &point.Upload, &point.Download, &point.ObservedMinutes); err != nil {
 			return nil, err
 		}
 		points = append(points, point)
@@ -287,6 +294,7 @@ type Filter struct {
 	App, Domain           string
 	AppExact, DomainExact bool
 	Apps, Domains         []string
+	BucketSeconds         int64
 }
 
 func conditions(since time.Time, timeColumn string, filters ...Filter) (string, []any) {

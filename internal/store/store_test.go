@@ -190,3 +190,32 @@ func TestRankingPagesBeyondTop100(t *testing.T) {
 		t.Fatalf("search clamps page: %+v, %v", result, err)
 	}
 }
+
+func TestSeriesBucketAggregationPreservesMissingBuckets(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	if err := db.Record(ctx, []Delta{
+		{At: at, Connection: "a", App: "a", Domain: "one", Upload: 1, Download: 10},
+		{At: at.Add(time.Minute), Connection: "b", App: "b", Domain: "two", Upload: 2, Download: 20},
+		{At: at.Add(19 * time.Minute), Connection: "a", App: "a", Domain: "one", Upload: 3, Download: 30},
+		{At: at.Add(60 * time.Minute), Connection: "a", App: "a", Domain: "one", Upload: 4, Download: 40},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	points, err := db.Series(ctx, at, Filter{Until: at.Add(80 * time.Minute), BucketSeconds: 1200})
+	if err != nil || len(points) != 2 {
+		t.Fatalf("buckets: %+v, %v", points, err)
+	}
+	if points[0].Download != 60 || points[0].Upload != 6 || points[0].ObservedMinutes != 3 || points[1].Time != at.Add(60*time.Minute).Unix() {
+		t.Fatalf("aggregation/gap: %+v", points)
+	}
+	points, err = db.Series(ctx, at, Filter{Apps: []string{"a"}, BucketSeconds: 1200})
+	if err != nil || points[0].Download != 40 || points[0].ObservedMinutes != 2 {
+		t.Fatalf("filtered buckets: %+v, %v", points, err)
+	}
+}

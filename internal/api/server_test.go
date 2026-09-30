@@ -100,3 +100,34 @@ func TestRankingPageAPI(t *testing.T) {
 		t.Fatalf("legacy response: %s, %v", w.Body.String(), err)
 	}
 }
+
+func TestSeriesBucketAPI(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().Truncate(time.Minute)
+	if err := db.Record(context.Background(), []store.Delta{
+		{At: now, Connection: "a", App: "a", Domain: "test", Download: 10},
+		{At: now.Add(time.Minute), Connection: "b", App: "b", Domain: "test", Download: 20},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(db, collector.New(nil, db), fstest.MapFS{}).Handler()
+	w := httptest.NewRecorder()
+	url := fmt.Sprintf("/api/series?from=%d&to=%d&bucket_minutes=20", now.Unix(), now.Add(40*time.Minute).Unix())
+	handler.ServeHTTP(w, httptest.NewRequest("GET", url, nil))
+	var points []store.TimePoint
+	if err := json.Unmarshal(w.Body.Bytes(), &points); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || len(points) != 1 || points[0].Download != 30 {
+		t.Fatalf("series=%s", w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/series?bucket_minutes=17", nil))
+	if w.Code != 400 {
+		t.Fatalf("invalid bucket: %s", w.Body.String())
+	}
+}

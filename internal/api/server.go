@@ -57,6 +57,18 @@ func (s *Server) series(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if value := r.URL.Query().Get("bucket_minutes"); value != "" {
+		minutes, err := strconv.Atoi(value)
+		valid := false
+		for _, preset := range []int{1, 5, 10, 20, 30, 60, 180, 360, 720, 1440, 4320, 10080} {
+			valid = valid || minutes == preset
+		}
+		if err != nil || !valid {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的时间桶粒度"})
+			return
+		}
+		filter.BucketSeconds = int64(minutes) * 60
+	}
 	series, err := s.store.Series(r.Context(), start, filter)
 	if err != nil {
 		writeError(w, err)
