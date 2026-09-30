@@ -226,14 +226,31 @@ GROUP BY %s ORDER BY SUM(upload + download) DESC, %s LIMIT ?`, column, where, co
 	}
 	rows.Close()
 	if dimension == "domain" {
-		eventWhere, eventArgs := conditions(since, "observed_at", filters...)
-		for i := range items {
-			args := append(append([]any{}, eventArgs...), items[i].Name)
-			err := s.db.QueryRowContext(ctx, `SELECT COALESCE(GROUP_CONCAT(proxy, ' / '), '') FROM
-    (SELECT DISTINCT proxy FROM connection_events WHERE `+eventWhere+` AND domain = ? AND proxy != '' ORDER BY proxy)`, args...).Scan(&items[i].Proxies)
-			if err != nil {
+		detailSince := since
+		cutoff := time.Now().Add(-7 * 24 * time.Hour).Truncate(time.Minute)
+		if detailSince.Before(cutoff) {
+			detailSince = cutoff
+		}
+		eventWhere, eventArgs := conditions(detailSince, "observed_at", filters...)
+		routes, err := s.db.QueryContext(ctx, `SELECT domain, GROUP_CONCAT(proxy, ' / ') FROM
+   (SELECT DISTINCT domain, proxy FROM connection_events WHERE `+eventWhere+` AND proxy != '' ORDER BY domain, proxy) GROUP BY domain`, eventArgs...)
+		if err != nil {
+			return nil, err
+		}
+		defer routes.Close()
+		proxies := map[string]string{}
+		for routes.Next() {
+			var domain, proxy string
+			if err := routes.Scan(&domain, &proxy); err != nil {
 				return nil, err
 			}
+			proxies[domain] = proxy
+		}
+		if err := routes.Err(); err != nil {
+			return nil, err
+		}
+		for i := range items {
+			items[i].Proxies = proxies[items[i].Name]
 		}
 	}
 	return items, nil

@@ -15,10 +15,10 @@ Clash 流量观察是 Windows 本地流量统计工具，为 Clash Verge Rev 内
 - `internal/mihomo/`：连接模型及 `/connections?interval=...` WebSocket 客户端；Bearer 密钥认证。
 - `internal/collector/`：快照差分、自动重连、进程/域名归属、暂停状态。
 - `internal/store/`：SQLite 建表、写入、清理及统计查询；修改数据模型时从这里查兼容性。
-- `internal/api/`：历史统计和状态 API；当前接口为 `/api/status`、`/api/summary`、`/api/series`、`/api/top/apps`、`/api/top/domains`。
+- `internal/api/`：历史统计和状态 API；当前接口为 `/api/status`、`/api/summary`、`/api/series`、`/api/top/apps`、`/api/top/domains`、`/api/connections`；历史接口支持按分钟对齐的 `from` / `to`、进程与域名组合筛选。
 - `internal/config/`、`internal/logging/`：配置默认值、数据路径及日志。
 - `internal/tray/`、`internal/platform/`：托盘菜单、图标、打开浏览器/文件夹及当前用户登录自启动。
-- `frontend/src/`：面板与样式；查询 API 每 5 秒刷新，尚无后端向前端推送通道。
+- `frontend/src/`：面板与样式；统计页每 5 秒刷新，连接查询页在查询、翻页或手动刷新时更新；尚无后端向前端推送通道。
 - `internal/webui/dist/`：已提交的前端构建资源，通过 `go:embed` 嵌入 EXE。不要手改哈希资源，修改前端源码后重新构建。
 - 使用说明查 `README.md`；发布构建查 `scripts/build.ps1`。按任务读取相关文件，不要求每次遍历整个仓库。
 
@@ -66,12 +66,12 @@ go vet ./...
 ## 统计语义与实现边界
 
 - 上传/下载单位是字节；每条连接按 ID 对相邻累计计数做差，不能直接把每次快照的累计值相加。
-- `traffic_minute` 按分钟、应用、域名聚合；`connection_events` 按连接 ID、分钟合并明细。清理只删除过期明细，分钟聚合长期保留；尚无日聚合表。
+- `traffic_minute` 按分钟、应用、域名聚合；`connection_events` 按连接 ID、分钟合并明细；`details` 保存连接元数据、完整代理链和起始时间，旧记录默认 `{}`。清理只删除过期明细，分钟聚合长期保留；尚无日聚合表。
 - `connections` 计数是采集器首次观察连接时累计的次数，不是每秒采样数，也不是当前活跃连接数。
 - 暂停时仍接收快照、更新差分基线，但跳过入库；保留该设计以避免恢复时补记正常采样覆盖的暂停流量。断线跨越暂停区间等边界需单独验证。
 - 新进程启动时缺少既有连接的基线，首个快照会把既有累计流量计入当前分钟。短连接可能在采样间隔内结束而漏记，连接消失后的尾部增量也可能漏记。统计不能当作精确计费数据。
 - 应用名称来自进程名/路径，缺失时显示“未知应用”；域名优先使用 host，其次 sniffHost，再回退目标 IP。只能归到进程，无法识别进程内的插件、浏览器标签页或 HTTPS 数据内容。
 - 首次采样、重连、计数重置、暂停恢复、连接消失和核心重启是改动采集算法时应关注的边界。
 - 修改 SQLite 表结构需兼容现有数据库：`CREATE TABLE IF NOT EXISTS` 不会为旧表补上字段或唯一约束。不要通过删除真实数据库解决迁移问题。
-- 当前没有单实例保护、任意时间范围筛选、应用与域名钻取页面或大流量告警。
+- 当前没有单实例保护、独立应用与域名钻取页面或大流量告警。统计与连接查询页共用时间、进程和域名筛选；明细接口限于最近 7 天，域名代理信息也依赖保留的最近 7 天明细。
 - 查询真实历史记录使用只读 SQLite 连接。
