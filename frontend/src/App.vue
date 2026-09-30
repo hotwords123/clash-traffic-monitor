@@ -170,7 +170,7 @@ async function renderChart() {
     tooltip: { trigger: 'axis', valueFormatter: (value: number | [number, number | null]) => { const amount = Array.isArray(value) ? value[1] : value; return amount === null ? '无记录' : bytes(amount) } },
     legend: { top: 0, data: ['下载', '上传'], textStyle: { color: '#9ba8c7' } },
     grid: { left: 64, right: 24, top: 45, bottom: 34 },
-    brush: { xAxisIndex: 0, brushType: 'lineX', brushMode: 'single', toolbox: [], removeOnClick: false, transformable: true, brushStyle: { color: 'rgba(110,231,199,.12)', borderColor: '#6ee7c7', borderWidth: 1 }, inBrush: { colorAlpha: 1 }, outOfBrush: { colorAlpha: .45 } },
+    brush: { xAxisIndex: 0, brushType: 'lineX', brushMode: 'single', toolbox: [], removeOnClick: true, transformable: true, brushStyle: { color: 'rgba(110,231,199,.12)', borderColor: '#6ee7c7', borderWidth: 1 }, inBrush: { colorAlpha: 1 }, outOfBrush: { colorAlpha: .45 } },
     xAxis: { type: 'time', min: bounds.value.from * 1000, max: bounds.value.to * 1000, axisLabel: { color: '#7e8bab', hideOverlap: true }, axisLine: { lineStyle: { color: '#29324b' } } },
     yAxis: { type: 'value', axisLabel: { color: '#7e8bab', formatter: bytes }, splitLine: { lineStyle: { color: '#1e2740' } } },
     series: [
@@ -227,9 +227,11 @@ onBeforeUnmount(() => {
     </div>
     <div v-show="view === 'overview'">
       <section class="panel chart-panel">
-        <div class="panel-title"><div><span>时间趋势</span><small>每桶 {{ bucketLabel }} · 上传与下载 · 拖拽框选统计时段，保留完整时间轴</small></div></div>
-        <fieldset class="range-presets"><legend class="sr-only">展示时间范围</legend><label v-for="option in presets" :key="option.hours" :class="{ active: preset === option.hours }"><input type="radio" name="range-preset" :value="option.hours" :checked="preset === option.hours" @change="choosePreset(option.hours)">{{ option.label }}</label></fieldset>
-        <form v-if="preset === 0" class="date-range" @submit.prevent="applyDates"><label>开始时间<input v-model="from" type="datetime-local" required></label><label>结束时间（不含）<input v-model="to" type="datetime-local" required></label><button type="submit">应用时间范围</button></form>
+        <div class="panel-title"><div><span>时间趋势</span><small>每桶 {{ bucketLabel }} · 上传与下载 · 拖拽框选时段，点击空白处清除，保留完整时间轴</small></div></div>
+        <div class="time-range-toolbar">
+          <div class="range-presets" role="group" aria-label="展示时间范围"><button v-for="option in presets" :key="option.hours" type="button" :class="{ active: preset === option.hours }" :aria-pressed="preset === option.hours" @click="choosePreset(option.hours)">{{ option.label }}</button></div>
+          <form v-if="preset === 0" class="date-range" @submit.prevent="applyDates"><label>开始时间<input v-model="from" type="datetime-local" required></label><label>结束时间（不含）<input v-model="to" type="datetime-local" required></label><button type="submit">应用时间范围</button></form>
+        </div>
         <p class="hint">展示范围：{{ dateTime(bounds.from) }} — {{ dateTime(bounds.to) }}。无记录区间留空。</p>
         <div ref="chartElement" class="chart" aria-label="流量趋势，可拖拽框选时间段"></div>
       </section>
