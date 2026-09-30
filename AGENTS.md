@@ -15,7 +15,7 @@ Clash 流量观察是 Windows 本地流量统计工具，为 Clash Verge Rev 内
 - `internal/mihomo/`：连接模型及 `/connections?interval=...` WebSocket 客户端；Bearer 密钥认证。
 - `internal/collector/`：快照差分、自动重连、进程/域名归属、暂停状态。
 - `internal/store/`：SQLite 建表、写入、清理及统计查询；修改数据模型时从这里查兼容性。
-- `internal/api/`：历史统计和状态 API；当前接口为 `/api/status`、`/api/summary`、`/api/series`、`/api/top/apps`、`/api/top/domains`、`/api/connections`；历史接口支持按分钟对齐的 `from` / `to`、进程与域名组合筛选。
+- `internal/api/`：历史统计和状态 API；当前接口为 `/api/status`、`/api/summary`、`/api/series`、`/api/top/apps`、`/api/top/domains`、`/api/connections`；历史接口支持按分钟对齐的 `from` / `to`、进程与域名组合筛选；重复 `app_selected` / `domain_selected` 参数指定精确多选（优先于搜索），排行带 `page` / `page_size` 返回分页对象；`/api/series` 的 `bucket_minutes` 支持预设聚合粒度。
 - `internal/config/`、`internal/logging/`：配置默认值、数据路径及日志。
 - `internal/tray/`、`internal/platform/`：托盘菜单、图标、打开浏览器/文件夹及当前用户登录自启动。
 - `frontend/src/`：面板与样式；统计页每 5 秒刷新，连接查询页在查询、翻页或手动刷新时更新；尚无后端向前端推送通道。
@@ -73,5 +73,5 @@ go vet ./...
 - 应用名称来自进程名/路径，缺失时显示“未知应用”；域名优先使用 host，其次 sniffHost，再回退目标 IP。只能归到进程，无法识别进程内的插件、浏览器标签页或 HTTPS 数据内容。
 - 首次采样、重连、计数重置、暂停恢复、连接消失和核心重启是改动采集算法时应关注的边界。
 - 修改 SQLite 表结构需兼容现有数据库：`CREATE TABLE IF NOT EXISTS` 不会为旧表补上字段或唯一约束。不要通过删除真实数据库解决迁移问题。
-- 当前没有单实例保护、独立应用与域名钻取页面或大流量告警。统计与连接查询页共用时间、进程和域名筛选；明细接口限于最近 7 天，域名代理信息也依赖保留的最近 7 天明细。
+- 当前没有单实例保护、独立应用与域名钻取页面或大流量告警。统计与连接查询页共用时间框选、进程和域名筛选；统计页仅自定义显示日期选择器，排行独立搜索分页与 Ctrl 多选，选择不收缩列表；图表按展示范围选择预设粒度，最多 72 个桶，框选不会裁剪曲线或改变其粒度；明细接口限于最近 7 天，域名代理信息也依赖保留的最近 7 天明细。
 - 查询真实历史记录使用只读 SQLite 连接。

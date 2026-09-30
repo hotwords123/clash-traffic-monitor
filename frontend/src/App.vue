@@ -1,253 +1,251 @@
 <script setup lang="ts">
 import { LineChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { BrushComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import * as echarts from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import RankingList from './RankingList.vue'
+import { brushRange, chartBucket, filterQuery, toggleSelection, type Range } from './filters'
+import type { RankedPage } from './types'
 
-echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
+echarts.use([LineChart, BrushComponent, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 type Status = { connected: boolean; paused: boolean; last_snapshot: string; last_error?: string; active_connections: number }
 type Summary = { upload: number; download: number; connections: number }
-type RankedItem = { name: string; upload: number; download: number; connections: number; proxies: string }
-type TimePoint = { time: number; upload: number; download: number }
-
+type TimePoint = { time: number; upload: number; download: number; observed_minutes: number }
 type Details = { chains?: string[]; start?: string; rule_payload?: string; metadata?: { network?: string; type?: string; processPath?: string; sourceIP?: string; sourcePort?: string; destinationIP?: string; destinationPort?: string } }
 type Event = { connection_id: string; time: number; app: string; domain: string; upload: number; download: number; rule: string; proxy: string; details: Details }
 type EventPage = { items: Event[]; total: number; page: number; page_size: number }
 const view = ref<'overview' | 'connections'>('overview')
-const hours = ref(24)
-const from = ref('')
-const to = ref('')
-const app = ref('')
-const domain = ref('')
-const appExact = ref(false)
-const domainExact = ref(false)
-const filters = ref({ hours: 24, from: '', to: '', app: '', domain: '', appExact: false, domainExact: false })
-const bounds = ref({ from: 0, to: 0 })
+const presets = [{ hours: 1, label: '1h' }, { hours: 24, label: '24h' }, { hours: 168, label: '7d' }, { hours: 720, label: '30d' }, { hours: 0, label: '自定义' }]
+const preset = ref(24)
+function presetRange(hours: number): Range { const to = Math.floor(Date.now() / 60000) * 60 + 60; return { from: to - hours * 3600, to } }
+const bounds = ref<Range>(presetRange(24))
+const selectedTime = ref<Range | null>(null)
+const bucket = computed(() => chartBucket(bounds.value))
+const bucketLabel = computed(() => bucket.value < 60 ? `${bucket.value} 分钟` : bucket.value < 1440 ? `${bucket.value / 60} 小时` : `${bucket.value / 1440} 天`)
+const effectiveTime = computed(() => selectedTime.value || bounds.value)
+function localInput(seconds: number) { const date = new Date(seconds * 1000); const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000); return local.toISOString().slice(0, 16) }
+const from = ref(localInput(bounds.value.from))
+const to = ref(localInput(bounds.value.to))
+const appSearch = ref('')
+const domainSearch = ref('')
+const appliedAppSearch = ref('')
+const appliedDomainSearch = ref('')
+const selectedApps = ref<string[]>([])
+const selectedDomains = ref<string[]>([])
+const emptyRanking = (): RankedPage => ({ items: [], total: 0, page: 1, page_size: 10 })
+const apps = ref<RankedPage>(emptyRanking())
+const domains = ref<RankedPage>(emptyRanking())
 const events = ref<EventPage>({ items: [], total: 0, page: 1, page_size: 50 })
 const page = ref(1)
 const error = ref('')
-let controller: AbortController | undefined
-let requestID = 0
 const status = ref<Status>({ connected: false, paused: false, last_snapshot: '', active_connections: 0 })
 const summary = ref<Summary>({ upload: 0, download: 0, connections: 0 })
-const apps = ref<RankedItem[]>([])
-const domains = ref<RankedItem[]>([])
 const series = ref<TimePoint[]>([])
-const loading = ref(true)
+const loading = ref(false)
 const chartElement = ref<HTMLElement>()
 let chart: echarts.ECharts | undefined
 let timer: number | undefined
-
+let appDebounce: number | undefined
+let domainDebounce: number | undefined
+let controller: AbortController | undefined
+let requestID = 0
+let drawing = false
 const total = computed(() => summary.value.upload + summary.value.download)
-const updatedAt = computed(() => status.value.last_snapshot ? new Date(status.value.last_snapshot).toLocaleTimeString('zh-CN') : '等待数据')
-
+const updatedAt = computed(() => status.value.last_snapshot && !status.value.last_snapshot.startsWith('0001-') ? new Date(status.value.last_snapshot).toLocaleTimeString('zh-CN') : '等待数据')
 function bytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
+  const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), 4)
   return `${(value / 1024 ** index).toFixed(index > 1 ? 2 : 0)} ${units[index]}`
-}
-
-async function getJSON<T>(path: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(path, { signal })
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new Error(body.error || `查询失败（${response.status}）`)
-  }
-  return response.json()
-}
-
-function applyFilters() {
-  if (hours.value === 0 && (!from.value || !to.value)) { error.value = '请选择开始和结束时间'; return }
-  if (hours.value === 0 && (new Date(from.value).getTime() >= new Date(to.value).getTime() || new Date(to.value).getTime() - new Date(from.value).getTime() > 366 * 86400000)) {
-    error.value = '时间范围必须大于零且不超过 366 天'; return
-  }
-  filters.value = { hours: hours.value, from: from.value, to: to.value, app: app.value.trim(), domain: domain.value.trim(), appExact: appExact.value, domainExact: domainExact.value }
-  page.value = 1
-  void refresh()
-}
-function resetFilters() {
-  hours.value = 24; from.value = ''; to.value = ''; app.value = ''; domain.value = ''; appExact.value = false; domainExact.value = false
-  applyFilters()
-}
-function drill(dimension: 'app' | 'domain', name: string) {
-  if (dimension === 'app') { app.value = name; appExact.value = true } else { domain.value = name; domainExact.value = true }
-  applyFilters()
 }
 function dateTime(seconds: number) { return new Date(seconds * 1000).toLocaleString('zh-CN') }
 function chain(item: Event) { return item.details.chains?.slice().reverse().join(' → ') || item.proxy || '未记录' }
-
+function resetPages() { apps.value.page = 1; domains.value.page = 1; page.value = 1 }
+function choosePreset(hours: number) {
+  preset.value = hours
+  if (hours === 0) return
+  bounds.value = presetRange(hours)
+  from.value = localInput(bounds.value.from); to.value = localInput(bounds.value.to)
+  selectedTime.value = null
+  resetPages()
+  void refresh()
+}
+function applyDates() {
+  const start = new Date(from.value).getTime() / 1000
+  const end = new Date(to.value).getTime() / 1000
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= end || end - start > 366 * 86400) { error.value = '请选择有效的开始和结束时间，范围不超过 366 天'; return }
+  bounds.value = { from: Math.floor(start / 60) * 60, to: Math.floor(end / 60) * 60 }
+  selectedTime.value = null; resetPages(); void refresh()
+}
+function clearTime() { selectedTime.value = null; resetPages(); void refresh() }
+function selectItem(dimension: 'app' | 'domain', name: string, multiple: boolean) {
+  const selected = dimension === 'app' ? selectedApps : selectedDomains
+  selected.value = toggleSelection(selected.value, name, multiple)
+  page.value = 1
+  void refresh()
+}
+function clearSelection(dimension: 'app' | 'domain') {
+  if (dimension === 'app') selectedApps.value = []; else selectedDomains.value = []
+  page.value = 1; void refresh()
+}
+function changeRankingPage(dimension: 'app' | 'domain', value: number) {
+  if (dimension === 'app') apps.value.page = value; else domains.value.page = value
+  void refresh()
+}
+async function getJSON<T>(path: string, signal: AbortSignal): Promise<T> {
+  const response = await fetch(path, { signal })
+  if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || `查询失败（${response.status}）`) }
+  return response.json()
+}
+function query(range: Range) { return filterQuery(range, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value).toString() }
 async function refresh() {
   const id = ++requestID
-  controller?.abort()
-  controller = new AbortController()
+  controller?.abort(); controller = new AbortController()
   const signal = controller.signal
-  loading.value = true
-  error.value = ''
+  loading.value = true; error.value = ''
   try {
-    const f = filters.value
-    const end = f.hours === 0 ? Math.floor(new Date(f.to).getTime() / 60000) * 60 : Math.floor(Date.now() / 60000) * 60 + 60
-    const start = f.hours === 0 ? Math.floor(new Date(f.from).getTime() / 60000) * 60 : Math.floor(Date.now() / 60000) * 60 - f.hours * 3600
-    const params = new URLSearchParams({ from: String(start), to: String(end), app: f.app, domain: f.domain, app_exact: f.appExact ? '1' : '0', domain_exact: f.domainExact ? '1' : '0' })
-    const query = '?' + params.toString()
+    const filter = query(effectiveTime.value)
     if (view.value === 'connections') {
       const [nextStatus, nextEvents] = await Promise.all([
         getJSON<Status>('/api/status', signal),
-        getJSON<EventPage>(`/api/connections${query}&page=${page.value}&page_size=50`, signal),
+        getJSON<EventPage>(`/api/connections?${filter}&page=${page.value}&page_size=50`, signal),
       ])
       if (id !== requestID) return
-      status.value = nextStatus
-      events.value = nextEvents
+      status.value = nextStatus; events.value = nextEvents
     } else {
+      // Rankings are a stable selection surface: only time and their own search narrow them.
+      const appQuery = filterQuery(effectiveTime.value, [], [], appliedAppSearch.value, '').toString()
+      const domainQuery = filterQuery(effectiveTime.value, [], [], '', appliedDomainSearch.value).toString()
       const [nextStatus, nextSummary, nextApps, nextDomains, nextSeries] = await Promise.all([
         getJSON<Status>('/api/status', signal),
-        getJSON<Summary>('/api/summary' + query, signal),
-        getJSON<RankedItem[]>('/api/top/apps' + query + '&limit=100', signal),
-        getJSON<RankedItem[]>('/api/top/domains' + query + '&limit=100', signal),
-        getJSON<TimePoint[]>('/api/series' + query, signal),
+        getJSON<Summary>('/api/summary?' + filter, signal),
+        getJSON<RankedPage>(`/api/top/apps?${appQuery}&page=${apps.value.page}&page_size=10`, signal),
+        getJSON<RankedPage>(`/api/top/domains?${domainQuery}&page=${domains.value.page}&page_size=10`, signal),
+        // The time selection never crops the chart's display range or data.
+        getJSON<TimePoint[]>('/api/series?' + query(bounds.value) + '&bucket_minutes=' + bucket.value, signal),
       ])
       if (id !== requestID) return
       status.value = nextStatus; summary.value = nextSummary; apps.value = nextApps; domains.value = nextDomains; series.value = nextSeries
-      bounds.value = { from: start, to: end }
       await renderChart()
     }
   } catch (cause) {
     if (id === requestID && !signal.aborted) error.value = cause instanceof Error ? cause.message : '查询失败，请重试'
-  } finally {
-    if (id === requestID) loading.value = false
-  }
+  } finally { if (id === requestID) loading.value = false }
 }
-
 function chartData(key: 'upload' | 'download'): [number, number | null][] {
   const data: [number, number | null][] = []
   let previous: number | undefined
+  const step = bucket.value * 60
   for (const point of series.value) {
-    if (previous !== undefined && point.time - previous > 60) data.push([(previous + 60) * 1000, null])
+    if (previous !== undefined && point.time - previous > step) data.push([(previous + step) * 1000, null])
     data.push([point.time * 1000, point[key]])
     previous = point.time
   }
   return data
 }
-
+function onBrushEnd(value: unknown) {
+  const payload = value as { areas?: { coordRange?: number[] }[] }
+  drawing = false
+  const range = payload.areas?.[0]?.coordRange
+  const selected = range ? brushRange(range, bounds.value) : null
+  if (selected?.from === selectedTime.value?.from && selected?.to === selectedTime.value?.to) return
+  selectedTime.value = selected
+  resetPages(); void refresh()
+}
 async function renderChart() {
   await nextTick()
-  if (!chartElement.value) return
-  chart ||= echarts.init(chartElement.value)
+  if (!chartElement.value || view.value !== 'overview' || drawing) return
+  if (!chart) {
+    chart = echarts.init(chartElement.value)
+    chart.on('brushEnd', onBrushEnd)
+    chart.getZr().on('mousedown', () => { drawing = true })
+    chart.getZr().on('mouseup', () => { drawing = false })
+    chart.getZr().on('globalout', () => { drawing = false })
+  }
   chart.resize()
   chart.setOption({
     animation: false,
     tooltip: { trigger: 'axis', valueFormatter: (value: number | [number, number | null]) => { const amount = Array.isArray(value) ? value[1] : value; return amount === null ? '无记录' : bytes(amount) } },
     legend: { top: 0, data: ['下载', '上传'], textStyle: { color: '#9ba8c7' } },
-    grid: { left: 54, right: 20, top: 45, bottom: 34 },
-    xAxis: {
-      type: 'time',
-      min: bounds.value.from * 1000,
-      max: bounds.value.to * 1000,
-      axisLabel: { color: '#7e8bab', hideOverlap: true },
-      axisLine: { lineStyle: { color: '#29324b' } },
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: { color: '#7e8bab', formatter: (value: number) => bytes(value) },
-      splitLine: { lineStyle: { color: '#1e2740' } },
-    },
+    grid: { left: 64, right: 24, top: 45, bottom: 34 },
+    brush: { xAxisIndex: 0, brushType: 'lineX', brushMode: 'single', toolbox: [], removeOnClick: false, transformable: true, brushStyle: { color: 'rgba(110,231,199,.12)', borderColor: '#6ee7c7', borderWidth: 1 }, inBrush: { colorAlpha: 1 }, outOfBrush: { colorAlpha: .45 } },
+    xAxis: { type: 'time', min: bounds.value.from * 1000, max: bounds.value.to * 1000, axisLabel: { color: '#7e8bab', hideOverlap: true }, axisLine: { lineStyle: { color: '#29324b' } } },
+    yAxis: { type: 'value', axisLabel: { color: '#7e8bab', formatter: bytes }, splitLine: { lineStyle: { color: '#1e2740' } } },
     series: [
-      { name: '下载', type: 'line', smooth: false, connectNulls: false, showSymbol: true, symbolSize: 3, areaStyle: { opacity: .12 }, data: chartData('download'), color: '#6ee7c7' },
-      { name: '上传', type: 'line', smooth: false, connectNulls: false, showSymbol: true, symbolSize: 3, areaStyle: { opacity: .08 }, data: chartData('upload'), color: '#7aa2ff' },
+      { name: '下载', type: 'line', connectNulls: false, showSymbol: true, symbolSize: 3, areaStyle: { opacity: .12 }, data: chartData('download'), color: '#6ee7c7' },
+      { name: '上传', type: 'line', connectNulls: false, showSymbol: true, symbolSize: 3, areaStyle: { opacity: .08 }, data: chartData('upload'), color: '#7aa2ff' },
     ],
   })
+  chart.dispatchAction({ type: 'brush', areas: selectedTime.value ? [{ brushType: 'lineX', xAxisIndex: 0, coordRange: [selectedTime.value.from * 1000, selectedTime.value.to * 1000] }] : [] })
+  chart.dispatchAction({ type: 'takeGlobalCursor', key: 'brush', brushOption: { brushType: 'lineX', brushMode: 'single' } })
 }
-
 function resize() { chart?.resize() }
+watch(appSearch, value => {
+  window.clearTimeout(appDebounce)
+  appDebounce = window.setTimeout(() => { appliedAppSearch.value = value.trim(); apps.value.page = 1; page.value = 1; void refresh() }, 300)
+})
+watch(domainSearch, value => {
+  window.clearTimeout(domainDebounce)
+  domainDebounce = window.setTimeout(() => { appliedDomainSearch.value = value.trim(); domains.value.page = 1; page.value = 1; void refresh() }, 300)
+})
 watch(view, () => { page.value = 1; void refresh() })
 onMounted(() => {
-  refresh()
-  timer = window.setInterval(() => { if (view.value === 'overview' && !loading.value) void refresh() }, 5000)
+  void refresh()
+  timer = window.setInterval(() => {
+    if (view.value !== 'overview' || loading.value || drawing) return
+    if (preset.value > 0 && !selectedTime.value) {
+      bounds.value = presetRange(preset.value)
+      from.value = localInput(bounds.value.from); to.value = localInput(bounds.value.to)
+    }
+    void refresh()
+  }, 5000)
   window.addEventListener('resize', resize)
 })
 onBeforeUnmount(() => {
-  if (timer) window.clearInterval(timer)
-  window.removeEventListener('resize', resize)
-  controller?.abort()
-  chart?.dispose()
+  window.clearInterval(timer); window.clearTimeout(appDebounce); window.clearTimeout(domainDebounce)
+  window.removeEventListener('resize', resize); controller?.abort(); chart?.dispose()
 })
 </script>
 
 <template>
   <main>
     <header>
-      <div>
-        <p class="eyebrow">LOCAL TRAFFIC ANALYTICS</p>
-        <h1>Clash 流量观察</h1>
-        <p class="subtitle">看清哪些应用、哪些域名，在什么时候消耗了流量。</p>
-      </div>
-      <div class="controls">
-        <span class="status" :class="{ online: status.connected && !status.paused, paused: status.paused }">
-          <i></i>{{ status.paused ? '已暂停' : status.connected ? '采集中' : '未连接' }} · {{ updatedAt }}
-        </span>
-      </div>
+      <div><p class="eyebrow">LOCAL TRAFFIC ANALYTICS</p><h1>Clash 流量观察</h1><p class="subtitle">看清哪些应用、哪些域名，在什么时候消耗了流量。</p></div>
+      <span class="status" :class="{ online: status.connected && !status.paused, paused: status.paused }"><i></i>{{ status.paused ? '已暂停' : status.connected ? '采集中' : '未连接' }} · {{ updatedAt }}</span>
     </header>
-
-    <section v-if="status.last_error && !status.connected" class="warning">
-      无法连接 Clash Verge Rev：{{ status.last_error }}
-    </section>
-
-    <nav class="tabs" aria-label="页面切换">
-      <button :class="{ selected: view === 'overview' }" @click="view = 'overview'">流量统计</button>
-      <button :class="{ selected: view === 'connections' }" @click="view = 'connections'">连接查询</button>
-    </nav>
-    <form class="panel filters" @submit.prevent="applyFilters">
-      <label>时间范围<select v-model="hours"><option :value="1">最近 1 小时</option><option :value="24">最近 24 小时</option><option :value="168">最近 7 天</option><option :value="720">最近 30 天</option><option :value="0">自定义时间</option></select></label>
-      <template v-if="hours === 0">
-        <label>开始时间<input v-model="from" type="datetime-local" required></label>
-        <label>结束时间（不含）<input v-model="to" type="datetime-local" required></label>
-      </template>
-      <label>进程<input v-model="app" placeholder="例如 browser.exe" @input="appExact = false"><span><input v-model="appExact" type="checkbox">精确匹配</span></label>
-      <label>域名<input v-model="domain" placeholder="例如 example.com" @input="domainExact = false"><span><input v-model="domainExact" type="checkbox">精确匹配</span></label>
-      <div class="filter-actions"><button type="submit">查询</button><button type="button" @click="resetFilters">重置</button></div>
-      <p class="hint">筛选同时作用于趋势、排行和连接明细；默认按名称包含匹配，时间精度为分钟。点击排行名称可精确筛选。</p>
-    </form>
+    <section v-if="status.last_error && !status.connected" class="warning">无法连接 Clash Verge Rev：{{ status.last_error }}</section>
+    <nav class="tabs" aria-label="页面切换"><button :class="{ selected: view === 'overview' }" @click="view = 'overview'">流量统计</button><button :class="{ selected: view === 'connections' }" @click="view = 'connections'">连接查询</button></nav>
     <section v-if="error" class="warning" role="alert">{{ error }}</section>
-    <p v-if="loading" class="hint" role="status">正在读取…</p>
-
+    <div class="filter-summary">
+      <span>统计时间：{{ dateTime(effectiveTime.from) }} — {{ dateTime(effectiveTime.to) }}（不含）</span>
+      <span>应用：{{ selectedApps.length ? `已选 ${selectedApps.length} 项` : appliedAppSearch ? `包含“${appliedAppSearch}”` : '全部' }}</span>
+      <span>域名：{{ selectedDomains.length ? `已选 ${selectedDomains.length} 项` : appliedDomainSearch ? `包含“${appliedDomainSearch}”` : '全部' }}</span>
+      <button v-if="selectedTime" @click="clearTime">清除框选</button><button v-if="selectedApps.length" @click="clearSelection('app')">清除应用选择</button><button v-if="selectedDomains.length" @click="clearSelection('domain')">清除域名选择</button>
+      <span class="loading-label" role="status">{{ loading ? '正在更新…' : '' }}</span>
+    </div>
     <div v-show="view === 'overview'">
-    <section class="metrics">
-      <article><span>总流量</span><strong>{{ bytes(total) }}</strong><small>所选时段</small></article>
-      <article><span>下载</span><strong>{{ bytes(summary.download) }}</strong><small>{{ total ? Math.round(summary.download / total * 100) : 0 }}% 占比</small></article>
-      <article><span>上传</span><strong>{{ bytes(summary.upload) }}</strong><small>{{ total ? Math.round(summary.upload / total * 100) : 0 }}% 占比</small></article>
-      <article><span>活跃连接</span><strong>{{ status.active_connections }}</strong><small>当前连接数</small></article>
-    </section>
-
-    <section class="panel chart-panel">
-      <div class="panel-title"><div><span>时间趋势</span><small>每分钟上传与下载 · 无记录区间保留空缺（可能是中断、暂停或无匹配流量）</small></div></div>
-      <div ref="chartElement" class="chart"></div>
-    </section>
-
-    <section class="rankings">
-      <article class="panel">
-        <div class="panel-title"><div><span>应用排行</span><small>按总流量排序 · 最多 100 项</small></div></div>
-        <div v-if="!apps.length" class="empty">{{ loading ? '正在读取…' : '尚无流量数据' }}</div>
-        <div v-for="(item, index) in apps" :key="item.name" class="rank-row">
-          <b>{{ String(index + 1).padStart(2, '0') }}</b>
-          <div><button class="name-link" @click="drill('app', item.name)">{{ item.name }}</button><small>{{ item.connections }} 个新观察连接</small></div>
-          <span>{{ bytes(item.upload + item.download) }}</span>
-        </div>
-      </article>
-      <article class="panel">
-        <div class="panel-title"><div><span>域名排行</span><small>按总流量排序 · 代理信息来自所选时段最近 7 天保留的明细</small></div></div>
-        <div v-if="!domains.length" class="empty">{{ loading ? '正在读取…' : '尚无流量数据' }}</div>
-        <div v-for="(item, index) in domains" :key="item.name" class="rank-row">
-          <b>{{ String(index + 1).padStart(2, '0') }}</b>
-          <div><button class="name-link" @click="drill('domain', item.name)">{{ item.name }}</button><small>代理组 / 出口：{{ item.proxies || '未记录' }}</small><small>↓ {{ bytes(item.download) }} · ↑ {{ bytes(item.upload) }}</small></div>
-          <span>{{ bytes(item.upload + item.download) }}</span>
-        </div>
-      </article>
-    </section>
+      <section class="panel chart-panel">
+        <div class="panel-title"><div><span>时间趋势</span><small>每桶 {{ bucketLabel }} · 上传与下载 · 拖拽框选统计时段，保留完整时间轴</small></div></div>
+        <fieldset class="range-presets"><legend class="sr-only">展示时间范围</legend><label v-for="option in presets" :key="option.hours" :class="{ active: preset === option.hours }"><input type="radio" name="range-preset" :value="option.hours" :checked="preset === option.hours" @change="choosePreset(option.hours)">{{ option.label }}</label></fieldset>
+        <form v-if="preset === 0" class="date-range" @submit.prevent="applyDates"><label>开始时间<input v-model="from" type="datetime-local" required></label><label>结束时间（不含）<input v-model="to" type="datetime-local" required></label><button type="submit">应用时间范围</button></form>
+        <p class="hint">展示范围：{{ dateTime(bounds.from) }} — {{ dateTime(bounds.to) }}。无记录区间留空。</p>
+        <div ref="chartElement" class="chart" aria-label="流量趋势，可拖拽框选时间段"></div>
+      </section>
+      <section class="metrics">
+        <article><span>总流量</span><strong>{{ bytes(total) }}</strong><small>当前筛选条件</small></article>
+        <article><span>下载</span><strong>{{ bytes(summary.download) }}</strong><small>{{ total ? Math.round(summary.download / total * 100) : 0 }}% 占比</small></article>
+        <article><span>上传</span><strong>{{ bytes(summary.upload) }}</strong><small>{{ total ? Math.round(summary.upload / total * 100) : 0 }}% 占比</small></article>
+        <article><span title="所选时段内首次采集到的连接数量">连接数</span><strong>{{ summary.connections }}</strong><small>当前活跃：{{ status.active_connections }}</small></article>
+      </section>
+      <section class="rankings">
+        <RankingList title="应用排行" dimension="app" :result="apps" :selected="selectedApps" :search="appSearch" :loading="loading" @search="appSearch = $event" @select="(name, multiple) => selectItem('app', name, multiple)" @page="changeRankingPage('app', $event)" @clear="clearSelection('app')" />
+        <RankingList title="域名排行" dimension="domain" :result="domains" :selected="selectedDomains" :search="domainSearch" :loading="loading" @search="domainSearch = $event" @select="(name, multiple) => selectItem('domain', name, multiple)" @page="changeRankingPage('domain', $event)" @clear="clearSelection('domain')" />
+      </section>
     </div>
     <section v-if="view === 'connections'" class="panel">
-      <div class="panel-title"><div><span>连接明细</span><small>最近 7 天内保留的记录 · 每个连接按分钟合并 · 时间降序</small></div><button @click="refresh">刷新</button></div>
+      <div class="panel-title"><div><span>连接明细</span><small>最近 7 天内保留的记录 · 每个连接按分钟合并 · 时间降序</small></div><div class="detail-actions"><button @click="view = 'overview'">调整筛选</button><button @click="refresh">刷新</button></div></div>
       <p class="hint">上传、下载为该分钟采集到的增量。旧记录仅包含已保存字段；连接起始时间不代表完整的活跃区间。</p>
       <div class="table-scroll">
         <table>
@@ -255,8 +253,8 @@ onBeforeUnmount(() => {
           <tbody>
             <tr v-for="item in events.items" :key="`${item.time}-${item.connection_id}`">
               <td class="nowrap">{{ dateTime(item.time) }}</td>
-              <td><button class="name-link" @click="drill('app', item.app)">{{ item.app }}</button></td>
-              <td><button class="name-link" @click="drill('domain', item.domain)">{{ item.domain }}</button></td>
+              <td><button class="name-link" :aria-pressed="selectedApps.includes(item.app)" @click="selectItem('app', item.app, $event.ctrlKey || $event.metaKey)">{{ item.app }}</button></td>
+              <td><button class="name-link" :aria-pressed="selectedDomains.includes(item.domain)" @click="selectItem('domain', item.domain, $event.ctrlKey || $event.metaKey)">{{ item.domain }}</button></td>
               <td>{{ item.proxy || '未记录' }}</td><td class="nowrap">{{ bytes(item.download) }}</td><td class="nowrap">{{ bytes(item.upload) }}</td><td>{{ item.rule || '未记录' }}</td>
               <td><details><summary>展开</summary><dl>
                 <dt>连接 ID</dt><dd>{{ item.connection_id }}</dd>
