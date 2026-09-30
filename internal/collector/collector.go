@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -74,8 +75,15 @@ func (c *Collector) Run(ctx context.Context) {
 				if upload == 0 && download == 0 && existed {
 					continue
 				}
+				details, _ := json.Marshal(struct {
+					Metadata    mihomo.Metadata `json:"metadata"`
+					Chains      []string        `json:"chains"`
+					Start       string          `json:"start"`
+					RulePayload string          `json:"rule_payload"`
+				}{connection.Metadata, connection.Chains, connection.Start, connection.RulePayload})
 				deltas = append(deltas, store.Delta{
-					At: now, Connection: connection.ID,
+					Details: details,
+					At:      now, Connection: connection.ID,
 					App: appName(connection.Metadata), Domain: domainName(connection.Metadata),
 					Upload: upload, Download: download, Rule: connection.Rule,
 					Proxy:         last(connection.Chains),

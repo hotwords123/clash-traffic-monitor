@@ -30,6 +30,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/series", s.series)
 	mux.HandleFunc("GET /api/top/apps", s.top("app"))
 	mux.HandleFunc("GET /api/top/domains", s.top("domain"))
+	mux.HandleFunc("GET /api/connections", s.connections)
 	mux.Handle("/", spaHandler(s.assets))
 	return withHeaders(mux)
 }
@@ -39,7 +40,11 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
-	summary, err := s.store.Summary(r.Context(), since(r))
+	start, filter, ok := queryFilter(w, r)
+	if !ok {
+		return
+	}
+	summary, err := s.store.Summary(r.Context(), start, filter)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -48,7 +53,11 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) series(w http.ResponseWriter, r *http.Request) {
-	series, err := s.store.Series(r.Context(), since(r))
+	start, filter, ok := queryFilter(w, r)
+	if !ok {
+		return
+	}
+	series, err := s.store.Series(r.Context(), start, filter)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -62,7 +71,11 @@ func (s *Server) top(dimension string) http.HandlerFunc {
 		if limit < 1 || limit > 100 {
 			limit = 10
 		}
-		items, err := s.store.Top(r.Context(), since(r), dimension, limit)
+		start, filter, ok := queryFilter(w, r)
+		if !ok {
+			return
+		}
+		items, err := s.store.Top(r.Context(), start, dimension, limit, filter)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -115,4 +128,55 @@ func withHeaders(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Query bounds are Unix seconds aligned to minutes, [from, to).
+func queryFilter(w http.ResponseWriter, r *http.Request) (time.Time, store.Filter, bool) {
+	q := r.URL.Query()
+	start := since(r).Truncate(time.Minute)
+	f := store.Filter{Until: time.Now().Add(time.Minute).Truncate(time.Minute), App: strings.TrimSpace(q.Get("app")), Domain: strings.TrimSpace(q.Get("domain")), AppExact: q.Get("app_exact") == "1", DomainExact: q.Get("domain_exact") == "1"}
+	for _, bound := range []struct {
+		key    string
+		target *time.Time
+	}{{"from", &start}, {"to", &f.Until}} {
+		if value := q.Get(bound.key); value != "" {
+			seconds, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || seconds < 0 || seconds > 253402300799 || seconds%60 != 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "时间参数必须是按分钟对齐的 Unix 秒数"})
+				return start, f, false
+			}
+			*bound.target = time.Unix(seconds, 0)
+		}
+	}
+	if !start.Before(f.Until) || f.Until.Sub(start) > 366*24*time.Hour {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "时间范围必须大于零且不超过 366 天"})
+		return start, f, false
+	}
+	return start, f, true
+}
+
+func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
+	start, filter, ok := queryFilter(w, r)
+	if !ok {
+		return
+	}
+	// Enforce the detail view's seven-day window even before scheduled cleanup.
+	cutoff := time.Now().Add(-7 * 24 * time.Hour).Truncate(time.Minute)
+	if start.Before(cutoff) {
+		start = cutoff
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	size, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page < 1 || page > 1000000 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = 50
+	}
+	result, err := s.store.Events(r.Context(), start, filter, page, size)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }

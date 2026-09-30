@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -49,5 +51,77 @@ func TestRecordAndQuery(t *testing.T) {
 	}
 	if len(points) != 1 || points[0].Upload != 170 || points[0].Download != 1430 {
 		t.Fatalf("unexpected series: %+v", points)
+	}
+}
+
+func TestFiltersAndEventPagination(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	err = db.Record(ctx, []Delta{
+		{At: at, Connection: "a", App: "Browser.exe", Domain: "example.com", Download: 10, Proxy: "自动选择", Details: json.RawMessage(`{"chains":["节点","自动选择"]}`), NewConnection: true},
+		{At: at.Add(time.Minute), Connection: "a", App: "Browser.exe", Domain: "example.com", Download: 20},
+		{At: at, Connection: "b", App: "other.exe", Domain: "example.com", Download: 100},
+		{At: at, Connection: "c", App: "Browser.exe", Domain: "other.com", Download: 100},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := Filter{Until: at.Add(time.Minute), App: "browser.exe", AppExact: true, Domain: "example.com", DomainExact: true}
+	summary, err := db.Summary(ctx, at, f)
+	if err != nil || summary.Download != 10 || summary.Connections != 1 {
+		t.Fatalf("summary: %+v, %v", summary, err)
+	}
+	points, err := db.Series(ctx, at, f)
+	if err != nil || len(points) != 1 || points[0].Download != 10 {
+		t.Fatalf("series: %+v, %v", points, err)
+	}
+	top, err := db.Top(ctx, at, "domain", 10, f)
+	if err != nil || len(top) != 1 || top[0].Proxies != "自动选择" {
+		t.Fatalf("top: %+v, %v", top, err)
+	}
+	events, err := db.Events(ctx, at, Filter{}, 1, 2)
+	if err != nil || events.Total != 4 || len(events.Items) != 2 {
+		t.Fatalf("events: %+v, %v", events, err)
+	}
+	events, err = db.Events(ctx, at, f, 1, 10)
+	if err != nil || len(events.Items) != 1 || events.Items[0].Proxy != "自动选择" || !json.Valid(events.Items[0].Details) {
+		t.Fatalf("filtered events: %+v, %v", events, err)
+	}
+	summary, err = db.Summary(ctx, at, Filter{App: "%"})
+	if err != nil || summary.Download != 0 {
+		t.Fatalf("literal wildcard: %+v, %v", summary, err)
+	}
+}
+
+func TestLegacyMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "traffic.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE connection_events (
+ connection_id TEXT NOT NULL, observed_at INTEGER NOT NULL, app TEXT NOT NULL,
+ domain TEXT NOT NULL, upload INTEGER NOT NULL, download INTEGER NOT NULL,
+ rule TEXT NOT NULL, proxy TEXT NOT NULL, PRIMARY KEY(connection_id, observed_at));
+ INSERT INTO connection_events VALUES ('old', 60, 'browser.exe', 'example.com', 1, 2, 'Domain', 'DIRECT')`)
+	legacy.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		db, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, err := db.Events(context.Background(), time.Unix(0, 0), Filter{}, 1, 10)
+		db.Close()
+		if err != nil || len(events.Items) != 1 || string(events.Items[0].Details) != "{}" || events.Items[0].Download != 2 {
+			t.Fatalf("migration: %+v, %v", events, err)
+		}
 	}
 }
