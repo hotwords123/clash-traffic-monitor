@@ -5,7 +5,7 @@ import * as echarts from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import RankingList from './RankingList.vue'
-import { brushRange, chartBucket, filterQuery, toggleSelection, type Range } from './filters'
+import { brushRange, chartBucket, filterQuery, rankingQuery, toggleSelection, trafficAxis, type Range } from './filters'
 import type { RankedPage } from './types'
 
 echarts.use([LineChart, BrushComponent, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
@@ -83,11 +83,12 @@ function clearTime() { selectedTime.value = null; resetPages(); void refresh() }
 function selectItem(dimension: 'app' | 'domain', name: string, multiple: boolean) {
   const selected = dimension === 'app' ? selectedApps : selectedDomains
   selected.value = toggleSelection(selected.value, name, multiple)
+  if (dimension === 'app') domains.value.page = 1; else apps.value.page = 1
   page.value = 1
   void refresh()
 }
 function clearSelection(dimension: 'app' | 'domain') {
-  if (dimension === 'app') selectedApps.value = []; else selectedDomains.value = []
+  if (dimension === 'app') { selectedApps.value = []; domains.value.page = 1 } else { selectedDomains.value = []; apps.value.page = 1 }
   page.value = 1; void refresh()
 }
 function changeRankingPage(dimension: 'app' | 'domain', value: number) {
@@ -115,9 +116,9 @@ async function refresh() {
       if (id !== requestID) return
       status.value = nextStatus; events.value = nextEvents
     } else {
-      // Rankings are a stable selection surface: only time and their own search narrow them.
-      const appQuery = filterQuery(effectiveTime.value, [], [], appliedAppSearch.value, '').toString()
-      const domainQuery = filterQuery(effectiveTime.value, [], [], '', appliedDomainSearch.value).toString()
+      // Keep each selection surface broad, but apply the opposite dimension filter.
+      const appQuery = rankingQuery('app', effectiveTime.value, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value).toString()
+      const domainQuery = rankingQuery('domain', effectiveTime.value, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value).toString()
       const [nextStatus, nextSummary, nextApps, nextDomains, nextSeries] = await Promise.all([
         getJSON<Status>('/api/status', signal),
         getJSON<Summary>('/api/summary?' + filter, signal),
@@ -165,6 +166,7 @@ async function renderChart() {
     chart.getZr().on('globalout', () => { drawing = false })
   }
   chart.resize()
+  const axis = trafficAxis(series.value.reduce((peak, point) => Math.max(peak, point.upload, point.download), 0))
   chart.setOption({
     animation: false,
     tooltip: { trigger: 'axis', valueFormatter: (value: number | [number, number | null]) => { const amount = Array.isArray(value) ? value[1] : value; return amount === null ? '无记录' : bytes(amount) } },
@@ -172,7 +174,7 @@ async function renderChart() {
     grid: { left: 64, right: 24, top: 45, bottom: 34 },
     brush: { xAxisIndex: 0, brushType: 'lineX', brushMode: 'single', toolbox: [], removeOnClick: true, transformable: true, brushStyle: { color: 'rgba(110,231,199,.12)', borderColor: '#6ee7c7', borderWidth: 1 }, inBrush: { colorAlpha: 1 }, outOfBrush: { colorAlpha: .45 } },
     xAxis: { type: 'time', min: bounds.value.from * 1000, max: bounds.value.to * 1000, axisLabel: { color: '#7e8bab', hideOverlap: true }, axisLine: { lineStyle: { color: '#29324b' } } },
-    yAxis: { type: 'value', axisLabel: { color: '#7e8bab', formatter: bytes }, splitLine: { lineStyle: { color: '#1e2740' } } },
+    yAxis: { type: 'value', min: axis.min, max: axis.max, interval: axis.interval, axisLabel: { color: '#7e8bab', formatter: axis.formatter }, splitLine: { lineStyle: { color: '#1e2740' } } },
     series: [
       { name: '下载', type: 'line', connectNulls: false, showSymbol: true, symbolSize: 3, areaStyle: { opacity: .12 }, data: chartData('download'), color: '#6ee7c7' },
       { name: '上传', type: 'line', connectNulls: false, showSymbol: true, symbolSize: 3, areaStyle: { opacity: .08 }, data: chartData('upload'), color: '#7aa2ff' },
@@ -184,11 +186,11 @@ async function renderChart() {
 function resize() { chart?.resize() }
 watch(appSearch, value => {
   window.clearTimeout(appDebounce)
-  appDebounce = window.setTimeout(() => { appliedAppSearch.value = value.trim(); apps.value.page = 1; page.value = 1; void refresh() }, 300)
+  appDebounce = window.setTimeout(() => { appliedAppSearch.value = value.trim(); apps.value.page = 1; if (!selectedApps.value.length) domains.value.page = 1; page.value = 1; void refresh() }, 300)
 })
 watch(domainSearch, value => {
   window.clearTimeout(domainDebounce)
-  domainDebounce = window.setTimeout(() => { appliedDomainSearch.value = value.trim(); domains.value.page = 1; page.value = 1; void refresh() }, 300)
+  domainDebounce = window.setTimeout(() => { appliedDomainSearch.value = value.trim(); domains.value.page = 1; if (!selectedDomains.value.length) apps.value.page = 1; page.value = 1; void refresh() }, 300)
 })
 watch(view, () => { page.value = 1; void refresh() })
 onMounted(() => {
