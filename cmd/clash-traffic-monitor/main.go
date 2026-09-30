@@ -17,6 +17,7 @@ import (
 	"github.com/local/clash-traffic-monitor/internal/config"
 	"github.com/local/clash-traffic-monitor/internal/logging"
 	"github.com/local/clash-traffic-monitor/internal/mihomo"
+	"github.com/local/clash-traffic-monitor/internal/platform"
 	"github.com/local/clash-traffic-monitor/internal/store"
 	trayapp "github.com/local/clash-traffic-monitor/internal/tray"
 	"github.com/local/clash-traffic-monitor/internal/webui"
@@ -30,6 +31,7 @@ func main() {
 }
 
 func run() error {
+	dpiError := platform.EnableDPIAwareness()
 	configPath := flag.String("config", "config.json", "配置文件路径")
 	noTray := flag.Bool("no-tray", false, "不显示托盘图标，用于控制台调试")
 	flag.Parse()
@@ -47,6 +49,9 @@ func run() error {
 		return fmt.Errorf("setup logging: %w", err)
 	}
 	defer logFile.Close()
+	if dpiError != nil {
+		slog.Warn("initialize DPI awareness", "error", dpiError)
+	}
 
 	db, err := store.Open(cfg.DatabasePath)
 	if err != nil {
