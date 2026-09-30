@@ -19,3 +19,15 @@ func TestNames(t *testing.T) {
 		t.Fatalf("domainName() = %q", got)
 	}
 }
+
+func TestPauseState(t *testing.T) {
+	collector := &Collector{}
+	collector.SetPaused(true)
+	if !collector.Paused() || !collector.Status().Paused {
+		t.Fatal("collector should report paused state")
+	}
+	collector.SetPaused(false)
+	if collector.Paused() || collector.Status().Paused {
+		t.Fatal("collector should report resumed state")
+	}
+}

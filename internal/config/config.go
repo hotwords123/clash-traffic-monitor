@@ -15,6 +15,7 @@ type Config struct {
 	SampleIntervalMS int    `json:"sample_interval_ms"`
 	RawRetentionDays int    `json:"raw_retention_days"`
 	DatabasePath     string `json:"database_path,omitempty"`
+	LogDirectory     string `json:"log_directory,omitempty"`
 }
 
 func Defaults() Config {
@@ -46,16 +47,26 @@ func Load(path string) (Config, error) {
 	if cfg.RawRetentionDays < 1 {
 		cfg.RawRetentionDays = 7
 	}
+	base, err := localDataDirectory()
+	if err != nil {
+		return cfg, err
+	}
 	if cfg.DatabasePath == "" {
-		base := os.Getenv("LOCALAPPDATA")
-		if base == "" {
-			var err error
-			base, err = os.UserConfigDir()
-			if err != nil {
-				return cfg, fmt.Errorf("locate data directory: %w", err)
-			}
-		}
 		cfg.DatabasePath = filepath.Join(base, "ClashTrafficMonitor", "traffic.db")
 	}
+	if cfg.LogDirectory == "" {
+		cfg.LogDirectory = filepath.Join(base, "ClashTrafficMonitor", "logs")
+	}
 	return cfg, nil
+}
+
+func localDataDirectory() (string, error) {
+	if base := os.Getenv("LOCALAPPDATA"); base != "" {
+		return base, nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("locate data directory: %w", err)
+	}
+	return base, nil
 }

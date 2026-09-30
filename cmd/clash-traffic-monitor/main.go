@@ -8,28 +8,49 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/local/clash-traffic-monitor/internal/api"
 	"github.com/local/clash-traffic-monitor/internal/collector"
 	"github.com/local/clash-traffic-monitor/internal/config"
+	"github.com/local/clash-traffic-monitor/internal/logging"
 	"github.com/local/clash-traffic-monitor/internal/mihomo"
 	"github.com/local/clash-traffic-monitor/internal/store"
+	trayapp "github.com/local/clash-traffic-monitor/internal/tray"
 	"github.com/local/clash-traffic-monitor/internal/webui"
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Clash 流量观察启动失败：%v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	configPath := flag.String("config", "config.json", "配置文件路径")
+	noTray := flag.Bool("no-tray", false, "不显示托盘图标，用于控制台调试")
 	flag.Parse()
 
-	cfg, err := config.Load(*configPath)
+	absoluteConfigPath, err := filepath.Abs(*configPath)
 	if err != nil {
-		fatal("load config", err)
+		return fmt.Errorf("resolve config path: %w", err)
 	}
+	cfg, err := config.Load(absoluteConfigPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	logFile, logPath, err := logging.Setup(cfg.LogDirectory)
+	if err != nil {
+		return fmt.Errorf("setup logging: %w", err)
+	}
+	defer logFile.Close()
+
 	db, err := store.Open(cfg.DatabasePath)
 	if err != nil {
-		fatal("open database", err)
+		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
@@ -45,17 +66,54 @@ func main() {
 		Handler:           api.New(db, trafficCollector, webui.Files()).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	serverError := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		err := server.ListenAndServe()
+		if err != nil && err != http.ErrServerClosed {
+			serverError <- err
+			stop()
+			return
+		}
+		serverError <- nil
 	}()
 
-	slog.Info("Clash 流量观察已启动", "dashboard", "http://"+cfg.Listen, "database", cfg.DatabasePath)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		fatal("serve dashboard", err)
+	dashboardURL := "http://" + cfg.Listen
+	slog.Info("Clash 流量观察已启动", "dashboard", dashboardURL, "database", cfg.DatabasePath, "log", logPath)
+
+	var runError error
+	if *noTray {
+		select {
+		case <-ctx.Done():
+		case runError = <-serverError:
+		}
+	} else {
+		tray, err := trayapp.New(trafficCollector, dashboardURL, cfg.LogDirectory, absoluteConfigPath, stop)
+		if err != nil {
+			stop()
+			runError = fmt.Errorf("create tray: %w", err)
+		} else if err := tray.Run(ctx); err != nil {
+			stop()
+			runError = fmt.Errorf("run tray: %w", err)
+		}
 	}
+	select {
+	case err := <-serverError:
+		if err != nil && runError == nil {
+			runError = fmt.Errorf("serve dashboard: %w", err)
+		}
+	default:
+	}
+
+	stop()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil && runError == nil {
+		runError = fmt.Errorf("stop dashboard: %w", err)
+	}
+	if runError != nil {
+		slog.Error("application stopped with error", "error", runError)
+	}
+	return runError
 }
 
 func cleanupLoop(ctx context.Context, db *store.Store, days int) {
@@ -71,9 +129,4 @@ func cleanupLoop(ctx context.Context, db *store.Store, days int) {
 		case <-ticker.C:
 		}
 	}
-}
-
-func fatal(action string, err error) {
-	fmt.Fprintf(os.Stderr, "%s: %v\n", action, err)
-	os.Exit(1)
 }

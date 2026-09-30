@@ -16,6 +16,7 @@ select { color: #eef3ff; background: #11182a; border: 1px solid #27314b; border-
 .status { color: #8491ae; font-size: 13px; white-space: nowrap; }
 .status i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #e16666; box-shadow: 0 0 12px #e16666; }
 .status.online i { background: #6ee7c7; box-shadow: 0 0 12px #6ee7c7; }
+.status.paused i { background: #f5ae54; box-shadow: 0 0 12px #f5ae54; }
 .warning { margin-bottom: 20px; border: 1px solid #65383d; border-radius: 12px; background: #2a171d; color: #ffb2b2; padding: 13px 16px; font-size: 13px; overflow-wrap: anywhere; }
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 14px; }
 .metrics article, .panel { border: 1px solid #202a42; background: linear-gradient(145deg, rgba(20,29,49,.95), rgba(13,19,34,.95)); border-radius: 16px; box-shadow: 0 18px 50px rgba(0,0,0,.18); }
@@ -44,4 +45,3 @@ select { color: #eef3ff; background: #11182a; border: 1px solid #27314b; border-
   .rankings { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) { .metrics { grid-template-columns: 1fr; } }
-

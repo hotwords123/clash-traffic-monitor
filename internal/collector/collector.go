@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/local/clash-traffic-monitor/internal/mihomo"
@@ -19,6 +20,7 @@ type totals struct {
 
 type Status struct {
 	Connected         bool      `json:"connected"`
+	Paused            bool      `json:"paused"`
 	LastSnapshot      time.Time `json:"last_snapshot"`
 	LastError         string    `json:"last_error,omitempty"`
 	ActiveConnections int       `json:"active_connections"`
@@ -31,6 +33,7 @@ type Collector struct {
 	store  *store.Store
 	mu     sync.RWMutex
 	status Status
+	paused atomic.Bool
 }
 
 func New(client *mihomo.Client, store *store.Store) *Collector {
@@ -40,7 +43,18 @@ func New(client *mihomo.Client, store *store.Store) *Collector {
 func (c *Collector) Status() Status {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.status
+	status := c.status
+	status.Paused = c.paused.Load()
+	return status
+}
+
+func (c *Collector) Paused() bool { return c.paused.Load() }
+
+func (c *Collector) SetPaused(paused bool) {
+	c.paused.Store(paused)
+	c.mu.Lock()
+	c.status.Paused = paused
+	c.mu.Unlock()
 }
 
 func (c *Collector) Run(ctx context.Context) {
@@ -70,11 +84,16 @@ func (c *Collector) Run(ctx context.Context) {
 			}
 			previous = next
 			backoff = time.Second
-			if err := c.store.Record(ctx, deltas); err != nil {
-				return err
+			if !c.paused.Load() {
+				if err := c.store.Record(ctx, deltas); err != nil {
+					return err
+				}
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
 			c.mu.Lock()
-			c.status = Status{Connected: true, LastSnapshot: now, ActiveConnections: len(snapshot.Connections), UploadTotal: snapshot.UploadTotal, DownloadTotal: snapshot.DownloadTotal}
+			c.status = Status{Connected: true, Paused: c.paused.Load(), LastSnapshot: now, ActiveConnections: len(snapshot.Connections), UploadTotal: snapshot.UploadTotal, DownloadTotal: snapshot.DownloadTotal}
 			c.mu.Unlock()
 			return nil
 		})

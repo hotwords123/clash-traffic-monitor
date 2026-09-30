@@ -9,6 +9,9 @@
 - 查看最近 1 小时、24 小时、7 天或 30 天趋势
 - 显示当前连接状态和活跃连接数
 - 数据只保存在本机 SQLite
+- Windows 系统托盘常驻，不显示控制台黑窗口
+- 托盘菜单支持打开面板、打开日志、暂停/恢复采集和退出
+- 可从托盘直接开启或关闭当前用户的开机启动
 
 ## Clash Verge Rev 设置
 
@@ -33,11 +36,19 @@ go run ./cmd/clash-traffic-monitor -config config.json
 
 ## 构建
 
+运行 `scripts\build.ps1`。脚本会构建前端、运行测试，并生成不显示控制台窗口的 `clash-traffic-monitor.exe`。
+
 ```powershell
-cd frontend
-npm run build
-cd ..
-go build -trimpath -o clash-traffic-monitor.exe ./cmd/clash-traffic-monitor
+.\scripts\build.ps1
+```
+
+双击程序后，它会常驻 Windows 通知区域。左键托盘图标可打开流量面板；右键可以打开面板或日志文件夹、暂停/恢复采集、设置开机启动以及退出。
+
+如需在控制台中调试日志，可以构建普通版本并使用 `-no-tray`：
+
+```powershell
+go run ./cmd/clash-traffic-monitor -config config.json -no-tray
 ```
 
 数据库默认位于 `%LOCALAPPDATA%\ClashTrafficMonitor\traffic.db`。
+日志默认位于 `%LOCALAPPDATA%\ClashTrafficMonitor\logs\traffic-monitor.log`，超过 5 MB 时保留一份轮转备份。

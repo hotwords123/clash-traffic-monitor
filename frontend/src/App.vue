@@ -7,13 +7,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
-type Status = { connected: boolean; last_snapshot: string; last_error?: string; active_connections: number }
+type Status = { connected: boolean; paused: boolean; last_snapshot: string; last_error?: string; active_connections: number }
 type Summary = { upload: number; download: number; connections: number }
 type RankedItem = { name: string; upload: number; download: number; connections: number }
 type TimePoint = { time: number; upload: number; download: number }
 
 const hours = ref(24)
-const status = ref<Status>({ connected: false, last_snapshot: '', active_connections: 0 })
+const status = ref<Status>({ connected: false, paused: false, last_snapshot: '', active_connections: 0 })
 const summary = ref<Summary>({ upload: 0, download: 0, connections: 0 })
 const apps = ref<RankedItem[]>([])
 const domains = ref<RankedItem[]>([])
@@ -115,8 +115,8 @@ onBeforeUnmount(() => {
           <option :value="168">最近 7 天</option>
           <option :value="720">最近 30 天</option>
         </select>
-        <span class="status" :class="{ online: status.connected }">
-          <i></i>{{ status.connected ? '采集中' : '未连接' }} · {{ updatedAt }}
+        <span class="status" :class="{ online: status.connected && !status.paused, paused: status.paused }">
+          <i></i>{{ status.paused ? '已暂停' : status.connected ? '采集中' : '未连接' }} · {{ updatedAt }}
         </span>
       </div>
     </header>
