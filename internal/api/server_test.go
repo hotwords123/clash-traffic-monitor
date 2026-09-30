@@ -62,3 +62,41 @@ func TestConnectionsRetentionAndFilters(t *testing.T) {
 		t.Fatalf("response=%d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestSelectedQueryNames(t *testing.T) {
+	_, f, ok := queryFilter(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/summary?app=search&app_selected=a.exe&app_selected=b.exe&app_selected=a.exe&domain_selected=one.test", nil))
+	if !ok || len(f.Apps) != 2 || len(f.Domains) != 1 || f.App != "search" {
+		t.Fatalf("multi selection parsing: %+v, %v", f, ok)
+	}
+}
+
+func TestRankingPageAPI(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().Truncate(time.Minute)
+	if err := db.Record(context.Background(), []store.Delta{
+		{At: now, Connection: "a", App: "a.exe", Domain: "test", Download: 10},
+		{At: now, Connection: "b", App: "b.exe", Domain: "test", Download: 20},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(db, collector.New(nil, db), fstest.MapFS{}).Handler()
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/top/apps?page=2&page_size=1&app=.exe", nil))
+	var result store.RankedPage
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || result.Total != 2 || result.Page != 2 || result.Items[0].Name != "a.exe" {
+		t.Fatalf("page response: %s", w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/top/apps?limit=10", nil))
+	var legacy []store.RankedItem
+	if err := json.Unmarshal(w.Body.Bytes(), &legacy); err != nil || len(legacy) != 2 {
+		t.Fatalf("legacy response: %s, %v", w.Body.String(), err)
+	}
+}

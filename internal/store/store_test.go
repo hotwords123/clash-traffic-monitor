@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -123,5 +124,69 @@ func TestLegacyMigration(t *testing.T) {
 		if err != nil || len(events.Items) != 1 || string(events.Items[0].Details) != "{}" || events.Items[0].Download != 2 {
 			t.Fatalf("migration: %+v, %v", events, err)
 		}
+	}
+}
+
+func TestMultiSelectionOverridesSearch(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	if err := db.Record(ctx, []Delta{
+		{At: at, Connection: "a", App: "a.exe", Domain: "one.test", Download: 10},
+		{At: at, Connection: "b", App: "b.exe", Domain: "one.test", Download: 20},
+		{At: at, Connection: "c", App: "a.exe", Domain: "two.test", Download: 40},
+		{At: at, Connection: "d", App: "c.exe", Domain: "one.test", Download: 80},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f := Filter{Until: at.Add(time.Minute), App: "no-match", Domain: "no-match", Apps: []string{"A.exe", "b.exe"}, Domains: []string{"one.test"}}
+	summary, err := db.Summary(ctx, at, f)
+	if err != nil || summary.Download != 30 {
+		t.Fatalf("selected OR/AND: %+v, %v", summary, err)
+	}
+	points, err := db.Series(ctx, at, f)
+	if err != nil || len(points) != 1 || points[0].Download != 30 {
+		t.Fatalf("series: %+v, %v", points, err)
+	}
+	events, err := db.Events(ctx, at, f, 1, 50)
+	if err != nil || events.Total != 2 {
+		t.Fatalf("events: %+v, %v", events, err)
+	}
+	f.Apps = nil
+	f.Domains = nil
+	f.App = ".exe"
+	f.Domain = "one"
+	summary, err = db.Summary(ctx, at, f)
+	if err != nil || summary.Download != 110 {
+		t.Fatalf("search fallback: %+v, %v", summary, err)
+	}
+}
+
+func TestRankingPagesBeyondTop100(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	deltas := []Delta{}
+	for i := range 105 {
+		deltas = append(deltas, Delta{At: at, Connection: fmt.Sprint(i), App: fmt.Sprintf("app-%03d.exe", i), Domain: "example.com", Download: 1})
+	}
+	if err := db.Record(ctx, deltas); err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.Ranking(ctx, at, "app", Filter{}, 11, 10)
+	if err != nil || result.Total != 105 || len(result.Items) != 5 || result.Items[0].Name != "app-100.exe" {
+		t.Fatalf("last page: %+v, %v", result, err)
+	}
+	result, err = db.Ranking(ctx, at, "app", Filter{App: "app-10"}, 11, 10)
+	if err != nil || result.Page != 1 || result.Total != 5 {
+		t.Fatalf("search clamps page: %+v, %v", result, err)
 	}
 }

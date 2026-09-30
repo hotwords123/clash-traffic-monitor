@@ -75,6 +75,16 @@ func (s *Server) top(dimension string) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		if r.URL.Query().Has("page") {
+			page, size := pagination(r, 10)
+			items, err := s.store.Ranking(r.Context(), start, dimension, filter, page, size)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, items)
+			return
+		}
 		items, err := s.store.Top(r.Context(), start, dimension, limit, filter)
 		if err != nil {
 			writeError(w, err)
@@ -135,6 +145,29 @@ func queryFilter(w http.ResponseWriter, r *http.Request) (time.Time, store.Filte
 	q := r.URL.Query()
 	start := since(r).Truncate(time.Minute)
 	f := store.Filter{Until: time.Now().Add(time.Minute).Truncate(time.Minute), App: strings.TrimSpace(q.Get("app")), Domain: strings.TrimSpace(q.Get("domain")), AppExact: q.Get("app_exact") == "1", DomainExact: q.Get("domain_exact") == "1"}
+	for _, selected := range []struct {
+		key    string
+		target *[]string
+	}{{"app_selected", &f.Apps}, {"domain_selected", &f.Domains}} {
+		names := q[selected.key]
+		if len(names) > 200 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "每类最多选择 200 项"})
+			return start, f, false
+		}
+		seen := map[string]bool{}
+		for _, value := range names {
+			value = strings.TrimSpace(value)
+			if value == "" || seen[value] {
+				continue
+			}
+			if len(value) > 1024 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "筛选名称过长"})
+				return start, f, false
+			}
+			seen[value] = true
+			*selected.target = append(*selected.target, value)
+		}
+	}
 	for _, bound := range []struct {
 		key    string
 		target *time.Time
@@ -165,18 +198,23 @@ func (s *Server) connections(w http.ResponseWriter, r *http.Request) {
 	if start.Before(cutoff) {
 		start = cutoff
 	}
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	size, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	if page < 1 || page > 1000000 {
-		page = 1
-	}
-	if size < 1 || size > 100 {
-		size = 50
-	}
+	page, size := pagination(r, 50)
 	result, err := s.store.Events(r.Context(), start, filter, page, size)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func pagination(r *http.Request, defaultSize int) (int, int) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	size, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page < 1 || page > 1000000 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = defaultSize
+	}
+	return page, size
 }

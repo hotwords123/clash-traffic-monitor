@@ -198,6 +198,10 @@ FROM traffic_minute WHERE `+where, args...).Scan(&result.Upload, &result.Downloa
 }
 
 func (s *Store) Top(ctx context.Context, since time.Time, dimension string, limit int, filters ...Filter) ([]RankedItem, error) {
+	return s.top(ctx, since, dimension, limit, 0, filters...)
+}
+
+func (s *Store) top(ctx context.Context, since time.Time, dimension string, limit, offset int, filters ...Filter) ([]RankedItem, error) {
 	column := "app"
 	if dimension == "domain" {
 		column = "domain"
@@ -206,8 +210,8 @@ func (s *Store) Top(ctx context.Context, since time.Time, dimension string, limi
 	query := fmt.Sprintf(`
 SELECT %s, SUM(upload), SUM(download), SUM(connections)
 FROM traffic_minute WHERE %s
-GROUP BY %s ORDER BY SUM(upload + download) DESC, %s LIMIT ?`, column, where, column, column)
-	args = append(args, limit)
+GROUP BY %s ORDER BY SUM(upload + download) DESC, %s LIMIT ? OFFSET ?`, column, where, column, column)
+	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -282,6 +286,7 @@ type Filter struct {
 	Until                 time.Time
 	App, Domain           string
 	AppExact, DomainExact bool
+	Apps, Domains         []string
 }
 
 func conditions(since time.Time, timeColumn string, filters ...Filter) (string, []any) {
@@ -298,7 +303,17 @@ func conditions(since time.Time, timeColumn string, filters ...Filter) (string, 
 	for _, item := range []struct {
 		column, value string
 		exact         bool
-	}{{"app", f.App, f.AppExact}, {"domain", f.Domain, f.DomainExact}} {
+		selected      []string
+	}{{"app", f.App, f.AppExact, f.Apps}, {"domain", f.Domain, f.DomainExact, f.Domains}} {
+		if len(item.selected) > 0 {
+			placeholders := make([]string, len(item.selected))
+			for i, name := range item.selected {
+				placeholders[i] = "?"
+				args = append(args, name)
+			}
+			where += " AND " + item.column + " COLLATE NOCASE IN (" + strings.Join(placeholders, ",") + ")"
+			continue
+		}
 		if item.value == "" {
 			continue
 		}
@@ -365,4 +380,29 @@ func (s *Store) Events(ctx context.Context, since time.Time, f Filter, page, pag
 		return result, err
 	}
 	return result, tx.Commit()
+}
+
+// RankedPage returns all matching names across pages, without a top-N cutoff.
+type RankedPage struct {
+	Items    []RankedItem `json:"items"`
+	Total    int64        `json:"total"`
+	Page     int          `json:"page"`
+	PageSize int          `json:"page_size"`
+}
+
+func (s *Store) Ranking(ctx context.Context, since time.Time, dimension string, f Filter, page, size int) (RankedPage, error) {
+	result := RankedPage{Items: []RankedItem{}, Page: page, PageSize: size}
+	column := "app"
+	if dimension == "domain" {
+		column = "domain"
+	}
+	where, args := conditions(since, "bucket", f)
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT "+column+") FROM traffic_minute WHERE "+where, args...).Scan(&result.Total); err != nil {
+		return result, err
+	}
+	lastPage := max(1, int((result.Total+int64(size)-1)/int64(size)))
+	result.Page = min(max(1, page), lastPage)
+	items, err := s.top(ctx, since, dimension, size, (result.Page-1)*size, f)
+	result.Items = items
+	return result, err
 }
