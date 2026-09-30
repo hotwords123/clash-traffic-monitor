@@ -1,0 +1,21 @@
+package collector
+
+import (
+	"testing"
+
+	"github.com/local/clash-traffic-monitor/internal/mihomo"
+)
+
+func TestNames(t *testing.T) {
+	metadata := mihomo.Metadata{
+		ProcessPath:   `C:\Program Files\Browser\browser.exe`,
+		SniffHost:     "VIDEO.EXAMPLE.COM.",
+		DestinationIP: "203.0.113.10",
+	}
+	if got := appName(metadata); got != "browser.exe" {
+		t.Fatalf("appName() = %q", got)
+	}
+	if got := domainName(metadata); got != "video.example.com" {
+		t.Fatalf("domainName() = %q", got)
+	}
+}

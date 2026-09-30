@@ -1,0 +1,8 @@
+{
+  "listen": "127.0.0.1:17890",
+  "mihomo_url": "http://127.0.0.1:9097",
+  "mihomo_secret": "replace-with-your-secret",
+  "sample_interval_ms": 1000,
+  "raw_retention_days": 7
+}
+
