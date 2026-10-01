@@ -1,8 +1,12 @@
-/clash-traffic-monitor.exe
+*.exe
 /frontend/node_modules/
 /frontend/dist/
+/internal/webui/dist/
 *.tsbuildinfo
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+*.log
+*.log.*
 config.json

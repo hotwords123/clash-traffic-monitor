@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gogpu/systray"
-	"github.com/local/clash-traffic-monitor/internal/collector"
-	"github.com/local/clash-traffic-monitor/internal/platform"
+	"github.com/hotwords123/clash-traffic-monitor/internal/collector"
+	"github.com/hotwords123/clash-traffic-monitor/internal/platform"
 )
 
 type App struct {

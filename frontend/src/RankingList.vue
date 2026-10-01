@@ -22,8 +22,8 @@ function choose(item: RankedItem, event: MouseEvent) { emit('select', item.name,
         <tbody>
           <tr v-for="(item, index) in result.items" :key="item.name" :class="{ 'selected-row': selected.includes(item.name) }" @click="choose(item, $event)">
             <td>{{ (result.page - 1) * result.page_size + index + 1 }}</td>
-            <td><button class="name-link" :aria-pressed="selected.includes(item.name)" @click.stop="choose(item, $event)">{{ item.name }}</button><small v-if="dimension === 'domain'">代理组 / 出口：{{ item.proxies || '未记录' }}</small><small>↓ {{ bytes(item.download) }} · ↑ {{ bytes(item.upload) }}</small></td>
-            <td class="nowrap">{{ bytes(item.upload + item.download) }}</td><td>{{ item.connections }}</td>
+            <td><button class="name-link" :aria-pressed="selected.includes(item.name)" @click.stop="choose(item, $event)">{{ item.name }}</button><small v-if="dimension === 'app'" title="当前时间和筛选条件下访问的不同域名数量">{{ item.domain_count }} 个域名</small><small v-else>代理组 / 出口：{{ item.proxies || '未记录' }}</small></td>
+            <td class="nowrap">{{ bytes(item.upload + item.download) }}<small>↓ {{ bytes(item.download) }} · ↑ {{ bytes(item.upload) }}</small></td><td>{{ item.connections }}</td>
           </tr>
           <tr v-if="!result.items.length"><td colspan="4" class="empty">{{ loading ? '正在读取…' : '没有匹配的记录' }}</td></tr>
         </tbody>

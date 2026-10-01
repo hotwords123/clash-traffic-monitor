@@ -3,7 +3,7 @@ package collector
 import (
 	"testing"
 
-	"github.com/local/clash-traffic-monitor/internal/mihomo"
+	"github.com/hotwords123/clash-traffic-monitor/internal/mihomo"
 )
 
 func TestNames(t *testing.T) {

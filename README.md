@@ -2,6 +2,39 @@
 
 一个面向 Clash Verge Rev / Mihomo 的本地流量统计工具。它只读取经过代理核心的连接元数据，不解密或保存 HTTPS 内容。
 
+## 下载与使用
+
+当前提供 Windows x64 构建，建议在 Windows 10 / 11 的 x64 系统上使用；其他系统和架构尚未验证。运行 EXE 不需要安装 Go、Node.js 或 SQLite，也不要求开启 TUN。
+
+1. 从 [Releases](https://github.com/hotwords123/clash-traffic-monitor/releases) 下载可用的发布包；如果尚无 Release，可以在 [Actions](https://github.com/hotwords123/clash-traffic-monitor/actions) 中下载成功构建的 `clash-traffic-monitor-windows-x64` 产物（通常需要登录 GitHub）。
+2. 解压到固定目录，将 `config.example.json` 复制为 `config.json`，与 `clash-traffic-monitor.exe` 放在一起。
+3. 在 Clash Verge Rev 中开启外部控制器并设置密钥，按下方说明填写配置。控制器必须运行在这台电脑上。
+4. 双击 EXE。程序会常驻通知区域，并自动用默认浏览器打开统计页面；默认地址为 `http://127.0.0.1:17890`。
+
+配置示例（控制器端口与密钥必须和实际设置一致）：
+
+```json
+{
+  "listen": "127.0.0.1:17890",
+  "mihomo_url": "http://127.0.0.1:9097",
+  "mihomo_secret": "替换为你设置的控制器密钥",
+  "sample_interval_ms": 1000,
+  "raw_retention_days": 7
+}
+```
+
+面板没有登录认证，请保持 `listen` 为本机回环地址，不要设为 `0.0.0.0` 或对外开放。`config.json` 含有密钥，请勿上传到 GitHub 或附在问题反馈中。
+
+关闭浏览器不会停止采集。托盘左键可重新打开面板，右键菜单支持暂停 / 恢复、打开日志文件夹、开机启动及退出。每次普通启动（包括开机启动）都会打开面板；`-no-tray` 调试模式不会自动打开浏览器。移动程序后，应重新设置开机启动。不要同时运行多个实例。
+
+复制到其他电脑时，带上 EXE 和配置文件，并按目标电脑的控制器设置修改配置；历史数据不会随 EXE 迁移。升级时先从托盘退出旧程序，再替换 EXE，保留配置和数据库即可。
+
+## 统计范围
+
+- 只统计经过 Mihomo 的连接，包含其中走 DIRECT 的流量，不是全机网卡流量。
+- 采样可能漏掉短连接和连接结束时的尾部流量；首次采样会计入已有连接的累计流量，因此不适合精确计费。
+- 只能识别进程和域名，不能区分浏览器标签页、插件或 HTTPS 内容。明细默认保留 7 天，分钟统计长期保留。
+
 ## 当前功能
 
 - 按分钟保存上传和下载流量
@@ -22,10 +55,11 @@
 - 时间范围为 1h、24h、7d、30d 或自定义单选分段按钮；仅选择自定义时，在同一行显示开始 / 结束日期选择器，窄屏可横向滚动。自定义时间按本地时区输入，开始时间包含、结束时间不包含，精度为分钟，范围最多 366 天。快捷范围在未框选时随自动刷新更新，框选后固定展示范围。
 - 在折线图内横向拖拽可选择实际统计时段，也可拖动选区及边缘调整。选中后保留整个展示日期范围和曲线，通过选区高亮标记；点击图表空白处（不拖动）或“清除框选”恢复整个范围的统计。
 - 应用和域名表格各有搜索和分页，每页 10 项。搜索按名称包含匹配，300ms 防抖后实时更新，未选择时筛选范围包括其他页的全部匹配项目。
+- 应用名称下显示当前时间和筛选条件下访问的不同域名数量（目标 IP 回退也计为一项）；两个列表的流量列均显示总量及下载 / 上传明细。
 - 点击项目高亮并应用过滤，再点已选项目取消；Ctrl + 点击可追加多选，普通点击其他项目切换为单选。选择跨分页、搜索保留，已选标签可随时取消。每类有已选项时，统计优先使用选择，搜索只更新该列表；没有选择时恢复搜索条件。应用与域名条件同时生效，同类多选取并集。
 - 两个排行列表按实际统计时间、各自搜索和另一列表的有效筛选条件联动更新。筛选应用会更新域名排行，筛选域名会更新应用排行；各自的选择只高亮本项，不收缩自己的列表。另一类筛选变化时，关联列表回到第一页，跨页已选标签仍保留。连接查询页的“调整筛选”返回统计页修改选择。
 
-图表根据完整展示日期范围从预设桶长中选择粒度，控制在最多 72 个桶：1h 为 1min，24h 为 20min，7d 为 3h，30d 为 12h；自定义范围同样自动计算。粒度仅影响图表聚合，总量、排行和明细仍按分钟边界筛选。空桶不补成零，保留按比例的缺失区间；有部分记录的桶显示已采集的总量。
+图表根据完整展示日期范围从预设桶长中选择粒度，按最多 72 个桶的范围选择粒度（对齐后首尾部分桶可能使实际桶数多 1 个）：1h 为 1min，24h 为 20min，7d 为 3h，30d 为 12h；自定义范围同样自动计算。一天以内的粒度按本地每天 00:00 对齐，例如 20min 对齐到每小时的 00、20、40 分钟；1 天、3 天和 7 天粒度以展示起始日期的本地 00:00 为基准。首尾桶仅统计查询范围内的流量，首个部分桶显示在图表左边界。粒度仅影响图表聚合，总量、排行和明细仍按分钟边界筛选。空桶不补成零，保留按比例的缺失区间；有部分记录的桶显示已采集的总量。
 
 “连接数”是所选时段内首次采集到的连接数量，同一连接后续采样不会反复计数，区别于当前活跃连接数。筛选进程后，可从趋势查看有流量的时段，从域名排行及连接明细查看访问目标；这不是进程的完整启动 / 退出记录。
 
@@ -40,17 +74,34 @@
 1. 打开“设置 → Clash 设置 → 外部控制”。
 2. 监听地址设为 `127.0.0.1:9097`，不要使用 `0.0.0.0`。
 3. 设置一个随机密钥。
-4. 在项目根目录把 `config.example.json` 复制为 `config.json`，填入相同密钥。
-5. 建议在 Mihomo 配置中启用 `enable-process: true` 和 `find-process-mode: always`，否则应用名称可能显示为“未知应用”。
+4. 在程序目录把 `config.example.json` 复制为 `config.json`，填入相同密钥。如果使用其他控制器端口，同时修改 `mihomo_url`。
+5. 建议通过当前订阅或全局扩展配置启用 `find-process-mode: always`，否则应用名称可能显示为“未知应用”。不要直接编辑会被客户端重建的运行配置文件。
+
+## 数据与故障排查
+
+数据库默认位于 `%LOCALAPPDATA%\ClashTrafficMonitor\traffic.db`，日志位于 `%LOCALAPPDATA%\ClashTrafficMonitor\logs\traffic-monitor.log`。只保存本机数据；备份历史记录时先退出程序，再复制数据库文件。日志在启动时检查大小，超过 5 MiB 会保留一份 `.1` 备份。
+
+- **面板显示未连接**：确认 Clash Verge Rev 正在运行、外部控制器已开启，核对 `mihomo_url` 和密钥；修改配置后重启本程序。
+- **应用显示“未知应用”**：确认 `find-process-mode: always` 已生效，并观察新建立的连接。
+- **页面打不开或程序退出**：检查是否已有实例运行、面板端口是否被占用，并查看日志。可在 PowerShell 中进入程序目录，用下面的命令指定配置并关闭托盘模式，再查看日志。发布版 EXE 不显示控制台错误；开发者可使用下方的 `go run` 调试命令查看错误输出。
+
+```powershell
+.\clash-traffic-monitor.exe -config .\config.json -no-tray
+```
+
+配置文件默认相对于当前工作目录查找；从其他目录启动或使用自定义快捷方式时，请通过 `-config` 指定配置文件的绝对路径。反馈问题时请删除密钥，并留意日志和截图中的个人路径、域名等信息。
 
 ## 开发
 
+需要 Windows、Go 1.26 或满足 `go.mod` 要求的版本，以及 Node.js 24（含 npm）。从仓库根目录执行：
+
+前端构建产物 `internal/webui/dist/` 不提交到 Git。首次检出仓库时，必须先完成下面的前端构建，再运行 `go run`、`go test`、`go vet` 或 `go build`；完整构建脚本和 CI 会自动按此顺序执行。
+
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run build
 cd ..
-go mod tidy
 go run ./cmd/clash-traffic-monitor -config config.json
 ```
 
@@ -58,13 +109,16 @@ go run ./cmd/clash-traffic-monitor -config config.json
 
 ## 构建
 
-运行 `scripts\build.ps1`。脚本会构建前端、运行测试，并生成不显示控制台窗口的 `clash-traffic-monitor.exe`。
+运行 `scripts\build.ps1`。脚本按顺序安装前端依赖、运行前端测试、执行类型检查和前端构建，再运行 Go 测试与 `go vet`，最终生成不显示控制台窗口的 `clash-traffic-monitor.exe`。任一步失败会立即停止，不会报告构建成功。前端构建与 Go 测试 / 构建不能并行，因为 EXE 需要嵌入生成的前端资源。
 
 ```powershell
 .\scripts\build.ps1
+
+# 旧 EXE 正在运行时，可指定另一个输出文件名
+.\scripts\build.ps1 -OutputPath .\clash-traffic-monitor-test.exe
 ```
 
-双击程序后，它会常驻 Windows 通知区域。左键托盘图标可打开流量面板；右键可以打开面板或日志文件夹、暂停/恢复采集、设置开机启动以及退出。
+GitHub Actions 在 push、Pull Request 和手动触发时执行同一构建脚本，使用 Windows runner 构建 x64 EXE，并上传包含 EXE、配置模板、README 和许可证的产物。工作流不自动创建 Release。
 
 如需在控制台中调试日志，可以构建普通版本并使用 `-no-tray`：
 
@@ -72,5 +126,6 @@ go run ./cmd/clash-traffic-monitor -config config.json
 go run ./cmd/clash-traffic-monitor -config config.json -no-tray
 ```
 
-数据库默认位于 `%LOCALAPPDATA%\ClashTrafficMonitor\traffic.db`。
-日志默认位于 `%LOCALAPPDATA%\ClashTrafficMonitor\logs\traffic-monitor.log`，超过 5 MB 时保留一份轮转备份。
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。第三方依赖保留各自的许可证。

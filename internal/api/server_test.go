@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/local/clash-traffic-monitor/internal/collector"
-	"github.com/local/clash-traffic-monitor/internal/store"
+	"github.com/hotwords123/clash-traffic-monitor/internal/collector"
+	"github.com/hotwords123/clash-traffic-monitor/internal/store"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -90,7 +90,7 @@ func TestRankingPageAPI(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != 200 || result.Total != 2 || result.Page != 2 || result.Items[0].Name != "a.exe" {
+	if w.Code != 200 || result.Total != 2 || result.Page != 2 || result.Items[0].Name != "a.exe" || result.Items[0].DomainCount != 1 {
 		t.Fatalf("page response: %s", w.Body.String())
 	}
 	w = httptest.NewRecorder()
@@ -107,7 +107,7 @@ func TestSeriesBucketAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	now := time.Now().Truncate(time.Minute)
+	now := time.Date(2026, time.October, 1, 10, 0, 0, 0, time.Local)
 	if err := db.Record(context.Background(), []store.Delta{
 		{At: now, Connection: "a", App: "a", Domain: "test", Download: 10},
 		{At: now.Add(time.Minute), Connection: "b", App: "b", Domain: "test", Download: 20},

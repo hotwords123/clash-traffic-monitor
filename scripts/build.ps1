@@ -1,24 +1,47 @@
+param(
+    [string]$OutputPath = ""
+)
+
 $ErrorActionPreference = "Stop"
-
 $projectRoot = Split-Path -Parent $PSScriptRoot
-
-Push-Location (Join-Path $projectRoot "frontend")
-try {
-    npm ci
-    npm run build
+if (-not $OutputPath) {
+    $OutputPath = Join-Path $projectRoot "clash-traffic-monitor.exe"
 }
-finally {
-    Pop-Location
+$OutputPath = [IO.Path]::GetFullPath($OutputPath)
+
+function Invoke-BuildCommand {
+    param([string]$FilePath, [string[]]$ArgumentList)
+    & $FilePath @ArgumentList
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath $($ArgumentList -join ' ') failed with exit code $LASTEXITCODE"
+    }
 }
 
-Push-Location $projectRoot
+$previousTelemetry = $env:GOTELEMETRY
 try {
     $env:GOTELEMETRY = "off"
-    go test ./...
-    go build -trimpath -ldflags="-H=windowsgui -s -w" -o clash-traffic-monitor.exe ./cmd/clash-traffic-monitor
+    Push-Location (Join-Path $projectRoot "frontend")
+    try {
+        Invoke-BuildCommand "npm.cmd" @("ci")
+        Invoke-BuildCommand "npm.cmd" @("test")
+        Invoke-BuildCommand "npm.cmd" @("run", "build")
+    }
+    finally {
+        Pop-Location
+    }
+
+    Push-Location $projectRoot
+    try {
+        Invoke-BuildCommand "go" @("test", "./...")
+        Invoke-BuildCommand "go" @("vet", "./...")
+        Invoke-BuildCommand "go" @("build", "-trimpath", "-ldflags=-H=windowsgui -s -w", "-o", $OutputPath, "./cmd/clash-traffic-monitor")
+    }
+    finally {
+        Pop-Location
+    }
 }
 finally {
-    Pop-Location
+    $env:GOTELEMETRY = $previousTelemetry
 }
 
-Write-Host "Built $projectRoot\clash-traffic-monitor.exe"
+Write-Host "Built $OutputPath"

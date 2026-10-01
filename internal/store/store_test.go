@@ -55,6 +55,47 @@ func TestRecordAndQuery(t *testing.T) {
 	}
 }
 
+func TestRankingDomainCount(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	at := time.Now().Add(-10 * 24 * time.Hour).Truncate(time.Minute)
+	if err := db.Record(ctx, []Delta{
+		{At: at, Connection: "a", App: "browser.exe", Domain: "one.test", Download: 10},
+		{At: at.Add(time.Minute), Connection: "b", App: "browser.exe", Domain: "one.test", Download: 20},
+		{At: at.Add(time.Minute), Connection: "c", App: "browser.exe", Domain: "two.test", Download: 30},
+		{At: at.Add(2 * time.Minute), Connection: "d", App: "browser.exe", Domain: "outside.test", Download: 40},
+		{At: at, Connection: "e", App: "other.exe", Domain: "other.test", Download: 50},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Cleanup(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		filter Filter
+		want   int64
+	}{
+		{"deduplicated across minutes after detail cleanup", Filter{Until: at.Add(2 * time.Minute), App: "browser.exe", AppExact: true}, 2},
+		{"time range", Filter{Until: at.Add(time.Minute), App: "browser.exe", AppExact: true}, 1},
+		{"domain selection", Filter{Until: at.Add(2 * time.Minute), App: "browser.exe", AppExact: true, Domains: []string{"two.test"}}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := db.Ranking(ctx, at, "app", tc.filter, 1, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Items) != 1 || result.Items[0].Name != "browser.exe" || result.Items[0].DomainCount != tc.want {
+				t.Fatalf("domain count: %+v, want %d", result, tc.want)
+			}
+		})
+	}
+}
+
 func TestFiltersAndEventPagination(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "traffic.db"))
 	if err != nil {
@@ -198,7 +239,7 @@ func TestSeriesBucketAggregationPreservesMissingBuckets(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := context.Background()
-	at := time.Now().Truncate(time.Minute)
+	at := time.Date(2026, time.October, 1, 10, 0, 0, 0, time.Local)
 	if err := db.Record(ctx, []Delta{
 		{At: at, Connection: "a", App: "a", Domain: "one", Upload: 1, Download: 10},
 		{At: at.Add(time.Minute), Connection: "b", App: "b", Domain: "two", Upload: 2, Download: 20},
@@ -217,5 +258,42 @@ func TestSeriesBucketAggregationPreservesMissingBuckets(t *testing.T) {
 	points, err = db.Series(ctx, at, Filter{Apps: []string{"a"}, BucketSeconds: 1200})
 	if err != nil || points[0].Download != 40 || points[0].ObservedMinutes != 2 {
 		t.Fatalf("filtered buckets: %+v, %v", points, err)
+	}
+}
+
+func TestSeriesBucketsAlignToLocalMidnight(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	midnight := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.Local)
+	at := midnight.Add(10*time.Hour + 7*time.Minute)
+	if err := db.Record(ctx, []Delta{
+		{At: at.Add(-time.Minute), Connection: "before", App: "a", Domain: "test", Download: 1000},
+		{At: at, Connection: "a", App: "a", Domain: "test", Download: 10},
+		{At: midnight.Add(10*time.Hour + 19*time.Minute), Connection: "b", App: "a", Domain: "test", Download: 20},
+		{At: midnight.Add(10*time.Hour + 20*time.Minute), Connection: "c", App: "a", Domain: "test", Download: 30},
+		{At: midnight.Add(10*time.Hour + 21*time.Minute), Connection: "after", App: "a", Domain: "test", Download: 2000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	points, err := db.Series(ctx, at, Filter{Until: midnight.Add(10*time.Hour + 21*time.Minute), BucketSeconds: 1200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 2 || points[0].Time != midnight.Add(10*time.Hour).Unix() || points[0].Download != 30 || points[1].Time != midnight.Add(10*time.Hour+20*time.Minute).Unix() || points[1].Download != 30 {
+		t.Fatalf("aligned partial buckets: %+v", points)
+	}
+	shifted, err := db.Series(ctx, at.Add(time.Minute), Filter{Until: midnight.Add(10*time.Hour + 21*time.Minute), BucketSeconds: 1200})
+	if err != nil || len(shifted) != 2 || shifted[0].Time != points[0].Time || shifted[0].Download != 20 {
+		t.Fatalf("moving query start changed alignment: %+v, %v", shifted, err)
+	}
+	for _, minutes := range []int64{180, 360, 720, 1440, 4320, 10080} {
+		points, err := db.Series(ctx, at, Filter{Until: at.Add(time.Hour), BucketSeconds: minutes * 60})
+		if err != nil || len(points) != 1 || (points[0].Time-midnight.Unix())%(minutes*60) != 0 {
+			t.Fatalf("%d-minute alignment: %+v, %v", minutes, points, err)
+		}
 	}
 }

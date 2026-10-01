@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/local/clash-traffic-monitor/internal/collector"
-	"github.com/local/clash-traffic-monitor/internal/store"
+	"github.com/hotwords123/clash-traffic-monitor/internal/collector"
+	"github.com/hotwords123/clash-traffic-monitor/internal/store"
 )
 
 type Server struct {

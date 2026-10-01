@@ -141,7 +141,9 @@ function chartData(key: 'upload' | 'download'): [number, number | null][] {
   const step = bucket.value * 60
   for (const point of series.value) {
     if (previous !== undefined && point.time - previous > step) data.push([(previous + step) * 1000, null])
-    data.push([point.time * 1000, point[key]])
+    // Keep the partial first bucket visible when its aligned start precedes
+    // the display range; the server only counts traffic within that range.
+    data.push([Math.max(point.time, bounds.value.from) * 1000, point[key]])
     previous = point.time
   }
   return data

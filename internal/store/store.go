@@ -42,6 +42,7 @@ type RankedItem struct {
 	Upload      int64  `json:"upload"`
 	Download    int64  `json:"download"`
 	Connections int64  `json:"connections"`
+	DomainCount int64  `json:"domain_count"`
 }
 
 type TimePoint struct {
@@ -209,7 +210,7 @@ func (s *Store) top(ctx context.Context, since time.Time, dimension string, limi
 	}
 	where, args := conditions(since, "bucket", filters...)
 	query := fmt.Sprintf(`
-SELECT %s, SUM(upload), SUM(download), SUM(connections)
+SELECT %s, SUM(upload), SUM(download), SUM(connections), COUNT(DISTINCT domain)
 FROM traffic_minute WHERE %s
 GROUP BY %s ORDER BY SUM(upload + download) DESC, %s LIMIT ? OFFSET ?`, column, where, column, column)
 	args = append(args, limit, offset)
@@ -221,7 +222,7 @@ GROUP BY %s ORDER BY SUM(upload + download) DESC, %s LIMIT ? OFFSET ?`, column, 
 	items := make([]RankedItem, 0, limit)
 	for rows.Next() {
 		var item RankedItem
-		if err := rows.Scan(&item.Name, &item.Upload, &item.Download, &item.Connections); err != nil {
+		if err := rows.Scan(&item.Name, &item.Upload, &item.Download, &item.Connections, &item.DomainCount); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -261,7 +262,8 @@ GROUP BY %s ORDER BY SUM(upload + download) DESC, %s LIMIT ? OFFSET ?`, column, 
 	return items, nil
 }
 
-// Series groups into fixed-size buckets anchored to the display start.
+// Series groups into fixed-size buckets anchored to local midnight on the
+// display start date. Query bounds still limit partial first and last buckets.
 // Only observed buckets are returned, so the UI can keep missing intervals empty.
 func (s *Store) Series(ctx context.Context, since time.Time, filters ...Filter) ([]TimePoint, error) {
 	where, args := conditions(since, "bucket", filters...)
@@ -269,7 +271,9 @@ func (s *Store) Series(ctx context.Context, since time.Time, filters ...Filter) 
 	if len(filters) > 0 && filters[0].BucketSeconds > 0 {
 		step = filters[0].BucketSeconds
 	}
-	args = append([]any{since.Unix(), since.Unix(), step, step}, args...)
+	localStart := since.In(time.Local)
+	anchor := time.Date(localStart.Year(), localStart.Month(), localStart.Day(), 0, 0, 0, 0, time.Local).Unix()
+	args = append([]any{anchor, anchor, step, step}, args...)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT (? + ((bucket - ?) / ?) * ?) AS time_bucket, SUM(upload), SUM(download), COUNT(DISTINCT bucket)
 FROM traffic_minute WHERE `+where+` GROUP BY time_bucket ORDER BY time_bucket`, args...)

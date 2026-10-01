@@ -1,4 +1,4 @@
-module github.com/local/clash-traffic-monitor
+module github.com/hotwords123/clash-traffic-monitor
 
 go 1.26.0
 

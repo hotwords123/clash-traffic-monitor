@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,15 +13,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/local/clash-traffic-monitor/internal/api"
-	"github.com/local/clash-traffic-monitor/internal/collector"
-	"github.com/local/clash-traffic-monitor/internal/config"
-	"github.com/local/clash-traffic-monitor/internal/logging"
-	"github.com/local/clash-traffic-monitor/internal/mihomo"
-	"github.com/local/clash-traffic-monitor/internal/platform"
-	"github.com/local/clash-traffic-monitor/internal/store"
-	trayapp "github.com/local/clash-traffic-monitor/internal/tray"
-	"github.com/local/clash-traffic-monitor/internal/webui"
+	"github.com/hotwords123/clash-traffic-monitor/internal/api"
+	"github.com/hotwords123/clash-traffic-monitor/internal/collector"
+	"github.com/hotwords123/clash-traffic-monitor/internal/config"
+	"github.com/hotwords123/clash-traffic-monitor/internal/logging"
+	"github.com/hotwords123/clash-traffic-monitor/internal/mihomo"
+	"github.com/hotwords123/clash-traffic-monitor/internal/platform"
+	"github.com/hotwords123/clash-traffic-monitor/internal/store"
+	trayapp "github.com/hotwords123/clash-traffic-monitor/internal/tray"
+	"github.com/hotwords123/clash-traffic-monitor/internal/webui"
 )
 
 func main() {
@@ -58,6 +59,11 @@ func run() error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
+	listener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return fmt.Errorf("listen for dashboard: %w", err)
+	}
+	defer listener.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -73,7 +79,7 @@ func run() error {
 	}
 	serverError := make(chan error, 1)
 	go func() {
-		err := server.ListenAndServe()
+		err := server.Serve(listener)
 		if err != nil && err != http.ErrServerClosed {
 			serverError <- err
 			stop()
@@ -96,9 +102,14 @@ func run() error {
 		if err != nil {
 			stop()
 			runError = fmt.Errorf("create tray: %w", err)
-		} else if err := tray.Run(ctx); err != nil {
-			stop()
-			runError = fmt.Errorf("run tray: %w", err)
+		} else {
+			if err := platform.OpenURL(dashboardURL); err != nil {
+				slog.Warn("open dashboard on startup", "error", err)
+			}
+			if err := tray.Run(ctx); err != nil {
+				stop()
+				runError = fmt.Errorf("run tray: %w", err)
+			}
 		}
 	}
 	select {

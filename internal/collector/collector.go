@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/local/clash-traffic-monitor/internal/mihomo"
-	"github.com/local/clash-traffic-monitor/internal/store"
+	"github.com/hotwords123/clash-traffic-monitor/internal/mihomo"
+	"github.com/hotwords123/clash-traffic-monitor/internal/store"
 )
 
 type totals struct {
