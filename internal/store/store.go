@@ -130,7 +130,10 @@ CREATE INDEX IF NOT EXISTS idx_minute_bucket ON traffic_minute(bucket);
 	if err != nil {
 		return err
 	}
-	return s.migrateProxyBuckets()
+	if err := s.migrateProxyBuckets(); err != nil {
+		return err
+	}
+	return s.backfillProxyBuckets()
 }
 
 // Keep legacy totals in an unknown route bucket: their route cannot be recovered reliably.

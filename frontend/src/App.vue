@@ -250,7 +250,7 @@ onBeforeUnmount(() => {
             <label v-for="item in availableProxies" :key="item.name"><input type="checkbox" :checked="selectedProxies.includes(item.name)" @change="toggleProxy(item.name)"><span class="proxy-option-name">{{ proxyName(item.name) }}<small>{{ item.connections }} 个连接</small></span><span class="proxy-option-traffic">{{ bytes(item.upload + item.download) }}</span></label>
             <p v-if="!availableProxies.length" class="hint">暂无已记录的代理组 / 出口</p>
           </div>
-          <p class="hint">升级前汇总归为“未记录”，原有连接明细仍可按已保存出口筛选。</p>
+          <p class="hint">旧汇总按保留明细回填出口；无法确认的流量和连接数保留为“未记录”。</p>
         </div>
       </div>
     </div>
