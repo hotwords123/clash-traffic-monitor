@@ -105,7 +105,7 @@ button:focus:not(:focus-visible), .table-scroll :focus:not(:focus-visible) { out
 .view-toolbar .tabs { margin-bottom: 0; }
 .proxy-filter { position: relative; margin-left: auto; }
 .proxy-filter > button { font-size: 13px; }
-.proxy-menu { position: absolute; right: 0; top: calc(100% + 8px); width: min(360px, calc(100vw - 24px)); z-index: 10; padding: 16px; border: 1px solid #27314b; border-radius: 12px; background: #11182a; box-shadow: 0 16px 45px rgba(0,0,0,.45); }
+.proxy-menu { position: absolute; right: 0; top: calc(100% + 8px); width: min(400px, calc(100vw - 24px)); z-index: 10; padding: 16px; border: 1px solid #27314b; border-radius: 12px; background: #11182a; box-shadow: 0 16px 45px rgba(0,0,0,.45); }
 .proxy-menu-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
 .proxy-menu-heading button { font-size: 11px; padding: 5px 8px; }
 .proxy-options { max-height: 280px; overflow-y: auto; }
@@ -114,5 +114,5 @@ button:focus:not(:focus-visible), .table-scroll :focus:not(:focus-visible) { out
 .proxy-options input { margin: 0; accent-color: #6ee7c7; flex-shrink: 0; }
 
 .proxy-option-name { flex: 1; min-width: 0; }
-.proxy-option-name small { display: block; color: #8996b4; font-size: 11px; margin-top: 4px; }
-.proxy-option-traffic { color: #6ee7c7; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.proxy-option-name small, .proxy-option-traffic small { display: block; color: #8996b4; font-size: 11px; margin-top: 4px; }
+.proxy-option-traffic { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; color: #eef3ff; font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }

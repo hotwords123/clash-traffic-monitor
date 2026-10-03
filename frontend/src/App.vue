@@ -247,10 +247,9 @@ onBeforeUnmount(() => {
           <div class="proxy-menu-heading"><strong>筛选代理组 / 出口</strong><button type="button" @click="clearProxies">恢复全部</button></div>
           <p class="hint">多选匹配任一项；不选表示全部。流量及连接数按当前时间、应用和域名条件统计。</p>
           <div class="proxy-options" role="group" aria-label="代理组 / 出口">
-            <label v-for="item in availableProxies" :key="item.name"><input type="checkbox" :checked="selectedProxies.includes(item.name)" @change="toggleProxy(item.name)"><span class="proxy-option-name">{{ proxyName(item.name) }}<small>{{ item.connections }} 个连接</small></span><span class="proxy-option-traffic">{{ bytes(item.upload + item.download) }}</span></label>
+            <label v-for="item in availableProxies" :key="item.name"><input type="checkbox" :checked="selectedProxies.includes(item.name)" @change="toggleProxy(item.name)"><span class="proxy-option-name">{{ proxyName(item.name) }}<small>{{ item.connections }} 个连接</small></span><span class="proxy-option-traffic"><span>{{ bytes(item.upload + item.download) }}</span><small>↓ {{ bytes(item.download) }} · ↑ {{ bytes(item.upload) }}</small></span></label>
             <p v-if="!availableProxies.length" class="hint">暂无已记录的代理组 / 出口</p>
           </div>
-          <p class="hint">旧汇总按保留明细回填出口；无法确认的流量和连接数保留为“未记录”。</p>
         </div>
       </div>
     </div>
