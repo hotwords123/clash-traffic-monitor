@@ -31,6 +31,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/top/apps", s.top("app"))
 	mux.HandleFunc("GET /api/top/domains", s.top("domain"))
 	mux.HandleFunc("GET /api/connections", s.connections)
+	mux.HandleFunc("GET /api/proxies", s.proxies)
 	mux.Handle("/", spaHandler(s.assets))
 	return withHeaders(mux)
 }
@@ -160,7 +161,7 @@ func queryFilter(w http.ResponseWriter, r *http.Request) (time.Time, store.Filte
 	for _, selected := range []struct {
 		key    string
 		target *[]string
-	}{{"app_selected", &f.Apps}, {"domain_selected", &f.Domains}} {
+	}{{"app_selected", &f.Apps}, {"domain_selected", &f.Domains}, {"proxy_selected", &f.Proxies}} {
 		names := q[selected.key]
 		if len(names) > 200 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "每类最多选择 200 项"})
@@ -168,8 +169,10 @@ func queryFilter(w http.ResponseWriter, r *http.Request) (time.Time, store.Filte
 		}
 		seen := map[string]bool{}
 		for _, value := range names {
-			value = strings.TrimSpace(value)
-			if value == "" || seen[value] {
+			if selected.key != "proxy_selected" {
+				value = strings.TrimSpace(value)
+			}
+			if (value == "" && selected.key != "proxy_selected") || seen[value] {
 				continue
 			}
 			if len(value) > 1024 {
@@ -229,4 +232,17 @@ func pagination(r *http.Request, defaultSize int) (int, int) {
 		size = defaultSize
 	}
 	return page, size
+}
+
+func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
+	start, filter, ok := queryFilter(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.store.ProxyOptions(r.Context(), start, filter)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }

@@ -79,10 +79,11 @@ CREATE TABLE IF NOT EXISTS traffic_minute (
   bucket INTEGER NOT NULL,
   app TEXT NOT NULL,
   domain TEXT NOT NULL,
+  proxy TEXT NOT NULL DEFAULT '',
   upload INTEGER NOT NULL DEFAULT 0,
   download INTEGER NOT NULL DEFAULT 0,
   connections INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (bucket, app, domain)
+  PRIMARY KEY (bucket, app, domain, proxy)
 );
 CREATE TABLE IF NOT EXISTS connection_events (
   connection_id TEXT NOT NULL,
@@ -126,7 +127,65 @@ CREATE INDEX IF NOT EXISTS idx_minute_bucket ON traffic_minute(bucket);
 	if !hasDetails {
 		_, err = s.db.Exec("ALTER TABLE connection_events ADD COLUMN details TEXT NOT NULL DEFAULT '{}'")
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return s.migrateProxyBuckets()
+}
+
+// Keep legacy totals in an unknown route bucket: their route cannot be recovered reliably.
+func (s *Store) migrateProxyBuckets() error {
+	var exists int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('traffic_minute') WHERE name = 'proxy'").Scan(&exists); err != nil {
+		return err
+	}
+	if exists != 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`CREATE TABLE traffic_minute_routes (
+ bucket INTEGER NOT NULL, app TEXT NOT NULL, domain TEXT NOT NULL, proxy TEXT NOT NULL DEFAULT '',
+ upload INTEGER NOT NULL DEFAULT 0, download INTEGER NOT NULL DEFAULT 0, connections INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(bucket, app, domain, proxy));
+ INSERT INTO traffic_minute_routes SELECT bucket, app, domain, '', upload, download, connections FROM traffic_minute;
+ DROP TABLE traffic_minute;
+ ALTER TABLE traffic_minute_routes RENAME TO traffic_minute;
+ CREATE INDEX idx_minute_bucket ON traffic_minute(bucket);`)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Ignore the route selection so users can compare and add other routes.
+func (s *Store) ProxyOptions(ctx context.Context, since time.Time, f Filter) ([]RankedItem, error) {
+	f.Proxies = nil
+	where, args := conditions(since, "bucket", f)
+	eventWhere, eventArgs := conditions(since, "observed_at", f)
+	args = append(args, eventArgs...)
+	rows, err := s.db.QueryContext(ctx, `WITH totals AS (
+ SELECT proxy, SUM(upload) AS upload, SUM(download) AS download, SUM(connections) AS connections
+ FROM traffic_minute WHERE `+where+` GROUP BY proxy
+ ), names AS (SELECT proxy FROM totals UNION SELECT proxy FROM connection_events WHERE `+eventWhere+`)
+ SELECT names.proxy, COALESCE(totals.upload,0), COALESCE(totals.download,0), COALESCE(totals.connections,0)
+ FROM names LEFT JOIN totals USING(proxy) ORDER BY COALESCE(totals.upload,0)+COALESCE(totals.download,0) DESC, names.proxy`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RankedItem{}
+	for rows.Next() {
+		var item RankedItem
+		if err := rows.Scan(&item.Name, &item.Upload, &item.Download, &item.Connections); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (s *Store) Record(ctx context.Context, deltas []Delta) error {
@@ -139,9 +198,9 @@ func (s *Store) Record(ctx context.Context, deltas []Delta) error {
 	}
 	defer tx.Rollback()
 	aggregate, err := tx.PrepareContext(ctx, `
-INSERT INTO traffic_minute(bucket, app, domain, upload, download, connections)
-VALUES(?, ?, ?, ?, ?, ?)
-ON CONFLICT(bucket, app, domain) DO UPDATE SET
+INSERT INTO traffic_minute(bucket, app, domain, proxy, upload, download, connections)
+VALUES(?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(bucket, app, domain, proxy) DO UPDATE SET
   upload = upload + excluded.upload,
   download = download + excluded.download,
   connections = connections + excluded.connections`)
@@ -170,7 +229,7 @@ ON CONFLICT(connection_id, observed_at) DO UPDATE SET
 		if d.NewConnection {
 			connectionIncrement = 1
 		}
-		if _, err := aggregate.ExecContext(ctx, bucket, d.App, d.Domain, d.Upload, d.Download, connectionIncrement); err != nil {
+		if _, err := aggregate.ExecContext(ctx, bucket, d.App, d.Domain, d.Proxy, d.Upload, d.Download, connectionIncrement); err != nil {
 			return err
 		}
 		details := string(d.Details)
@@ -298,6 +357,7 @@ type Filter struct {
 	App, Domain           string
 	AppExact, DomainExact bool
 	Apps, Domains         []string
+	Proxies               []string
 	BucketSeconds         int64
 }
 
@@ -336,6 +396,14 @@ func conditions(since time.Time, timeColumn string, filters ...Filter) (string, 
 			where += " AND instr(lower(" + item.column + "), lower(?)) > 0"
 			args = append(args, strings.TrimSpace(item.value))
 		}
+	}
+	if len(f.Proxies) > 0 {
+		placeholders := make([]string, len(f.Proxies))
+		for i, name := range f.Proxies {
+			placeholders[i] = "?"
+			args = append(args, name)
+		}
+		where += " AND proxy IN (" + strings.Join(placeholders, ",") + ")"
 	}
 	return where, args
 }

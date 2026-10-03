@@ -12,18 +12,19 @@ export function brushRange(range: number[], display: Range): Range | null {
   return from < to ? { from, to } : null
 }
 
-export function filterQuery(range: Range, apps: string[], domains: string[], appSearch: string, domainSearch: string): URLSearchParams {
+export function filterQuery(range: Range, apps: string[], domains: string[], appSearch: string, domainSearch: string, proxies: string[] = []): URLSearchParams {
   const params = new URLSearchParams({ from: String(range.from), to: String(range.to) })
   if (apps.length) apps.forEach(name => params.append('app_selected', name))
   else if (appSearch) params.set('app', appSearch)
   if (domains.length) domains.forEach(name => params.append('domain_selected', name))
   else if (domainSearch) params.set('domain', domainSearch)
+  proxies.forEach(name => params.append('proxy_selected', name))
   return params
 }
 
 // Each ranking ignores its own selection, while respecting the opposite filter.
-export function rankingQuery(dimension: 'app' | 'domain', range: Range, apps: string[], domains: string[], appSearch: string, domainSearch: string): URLSearchParams {
-  return filterQuery(range, dimension === 'domain' ? apps : [], dimension === 'app' ? domains : [], appSearch, domainSearch)
+export function rankingQuery(dimension: 'app' | 'domain', range: Range, apps: string[], domains: string[], appSearch: string, domainSearch: string, proxies: string[] = []): URLSearchParams {
+  return filterQuery(range, dimension === 'domain' ? apps : [], dimension === 'app' ? domains : [], appSearch, domainSearch, proxies)
 }
 
 export const bucketMinutes = [1, 5, 10, 20, 30, 60, 180, 360, 720, 1440, 4320, 10080]

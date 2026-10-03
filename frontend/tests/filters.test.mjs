@@ -75,3 +75,13 @@ test('traffic axis uses integer labels and covers peaks across unit boundaries',
   const axis = trafficAxis(118.35 * 1024 ** 2)
   assert.equal(axis.formatter(axis.interval), '50 MB')
 })
+
+test('proxy multi-selection applies to queries and both rankings, including unknown', () => {
+  const range = { from: 60, to: 180 }
+  const proxies = ['A&B', 'DIRECT', '']
+  assert.deepEqual(filterQuery(range, [], [], '', '', proxies).getAll('proxy_selected'), proxies)
+  for (const dimension of ['app', 'domain']) {
+    assert.deepEqual(rankingQuery(dimension, range, ['app'], ['site'], '', '', proxies).getAll('proxy_selected'), proxies)
+  }
+  assert.equal(filterQuery(range, [], [], '', '').has('proxy_selected'), false)
+})

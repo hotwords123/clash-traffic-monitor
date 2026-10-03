@@ -297,3 +297,84 @@ func TestSeriesBucketsAlignToLocalMidnight(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyFiltersPreserveTotalsAndRetention(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	at := time.Now().Add(-10 * 24 * time.Hour).Truncate(time.Minute)
+	if err := db.Record(ctx, []Delta{
+		{At: at, Connection: "a", App: "app", Domain: "site", Proxy: "Group", Download: 10, NewConnection: true},
+		{At: at, Connection: "b", App: "app", Domain: "site", Proxy: "DIRECT", Download: 20, NewConnection: true},
+		{At: at, Connection: "c", App: "app", Domain: "site", Proxy: "Group extra", Download: 40, NewConnection: true},
+		{At: at, Connection: "d", App: "app", Domain: "site", Download: 80, NewConnection: true},
+		{At: at.Add(time.Second), Connection: "a", App: "app", Domain: "site", Proxy: "Group", Download: 5},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f := Filter{Until: at.Add(time.Minute), Proxies: []string{"Group", "DIRECT"}}
+	check := func() {
+		t.Helper()
+		sum, err := db.Summary(ctx, at, f)
+		if err != nil || sum.Download != 35 || sum.Connections != 2 {
+			t.Fatalf("summary: %+v %v", sum, err)
+		}
+		points, err := db.Series(ctx, at, f)
+		if err != nil || len(points) != 1 || points[0].Download != 35 {
+			t.Fatalf("series: %+v %v", points, err)
+		}
+		ranks, err := db.Ranking(ctx, at, "app", f, 1, 10)
+		if err != nil || ranks.Total != 1 || ranks.Items[0].Download != 35 {
+			t.Fatalf("ranking: %+v %v", ranks, err)
+		}
+	}
+	check()
+	events, err := db.Events(ctx, at, f, 1, 50)
+	if err != nil || events.Total != 2 {
+		t.Fatalf("events: %+v %v", events, err)
+	}
+	unknown, err := db.Summary(ctx, at, Filter{Proxies: []string{""}})
+	if err != nil || unknown.Download != 80 {
+		t.Fatalf("unknown: %+v %v", unknown, err)
+	}
+	all, err := db.Summary(ctx, at)
+	if err != nil || all.Download != 155 || all.Connections != 4 {
+		t.Fatalf("all: %+v %v", all, err)
+	}
+	if err := db.Cleanup(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	options, err := db.ProxyOptions(ctx, at, f)
+	if err != nil || len(options) != 4 || options[0].Download != 80 || options[1].Name != "Group extra" {
+		t.Fatalf("options after cleanup: %v %v", options, err)
+	}
+}
+
+func TestLegacyProxyMigrationIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "traffic.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE traffic_minute (bucket INTEGER NOT NULL, app TEXT NOT NULL, domain TEXT NOT NULL, upload INTEGER NOT NULL DEFAULT 0, download INTEGER NOT NULL DEFAULT 0, connections INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(bucket,app,domain));
+ INSERT INTO traffic_minute VALUES(60,'app','site',10,20,2);`)
+	legacy.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		db, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum, err := db.Summary(context.Background(), time.Unix(0, 0), Filter{Proxies: []string{""}})
+		if err != nil || sum.Upload != 10 || sum.Download != 20 || sum.Connections != 2 {
+			t.Fatalf("legacy totals: %+v %v", sum, err)
+		}
+		db.Close()
+	}
+}

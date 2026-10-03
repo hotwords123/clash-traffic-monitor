@@ -6,7 +6,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import RankingList from './RankingList.vue'
 import { brushRange, chartBucket, filterQuery, rankingQuery, toggleSelection, trafficAxis, type Range } from './filters'
-import type { RankedPage } from './types'
+import type { RankedItem, RankedPage } from './types'
 
 echarts.use([LineChart, BrushComponent, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
@@ -34,6 +34,16 @@ const appliedAppSearch = ref('')
 const appliedDomainSearch = ref('')
 const selectedApps = ref<string[]>([])
 const selectedDomains = ref<string[]>([])
+const selectedProxies = ref<string[]>([])
+const proxyOptions = ref<RankedItem[]>([])
+const proxyMenu = ref<HTMLElement>()
+const proxyMenuOpen = ref(false)
+const availableProxies = computed(() => [...proxyOptions.value, ...selectedProxies.value.filter(name => !proxyOptions.value.some(item => item.name === name)).map(name => ({ name, upload: 0, download: 0, connections: 0, proxies: '', domain_count: 0 }))])
+function proxyName(name: string) { return name || '未记录（含升级前汇总）' }
+function toggleProxy(name: string) { selectedProxies.value = toggleSelection(selectedProxies.value, name, true); resetPages(); void refresh() }
+function clearProxies() { selectedProxies.value = []; resetPages(); void refresh() }
+function closeProxyMenu(event: PointerEvent) { if (!proxyMenu.value?.contains(event.target as Node)) proxyMenuOpen.value = false }
+
 const emptyRanking = (): RankedPage => ({ items: [], total: 0, page: 1, page_size: 10 })
 const apps = ref<RankedPage>(emptyRanking())
 const domains = ref<RankedPage>(emptyRanking())
@@ -100,13 +110,16 @@ async function getJSON<T>(path: string, signal: AbortSignal): Promise<T> {
   if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.error || `查询失败（${response.status}）`) }
   return response.json()
 }
-function query(range: Range) { return filterQuery(range, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value).toString() }
+function query(range: Range) { return filterQuery(range, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value, selectedProxies.value).toString() }
 async function refresh() {
   const id = ++requestID
   controller?.abort(); controller = new AbortController()
   const signal = controller.signal
   loading.value = true; error.value = ''
   try {
+    const nextProxies = await getJSON<RankedItem[]>('/api/proxies?' + filterQuery(effectiveTime.value, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value).toString(), signal)
+    if (id !== requestID) return
+    proxyOptions.value = nextProxies
     const filter = query(effectiveTime.value)
     if (view.value === 'connections') {
       const [nextStatus, nextEvents] = await Promise.all([
@@ -117,8 +130,8 @@ async function refresh() {
       status.value = nextStatus; events.value = nextEvents
     } else {
       // Keep each selection surface broad, but apply the opposite dimension filter.
-      const appQuery = rankingQuery('app', effectiveTime.value, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value).toString()
-      const domainQuery = rankingQuery('domain', effectiveTime.value, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value).toString()
+      const appQuery = rankingQuery('app', effectiveTime.value, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value, selectedProxies.value).toString()
+      const domainQuery = rankingQuery('domain', effectiveTime.value, selectedApps.value, selectedDomains.value, appliedAppSearch.value, appliedDomainSearch.value, selectedProxies.value).toString()
       const [nextStatus, nextSummary, nextApps, nextDomains, nextSeries] = await Promise.all([
         getJSON<Status>('/api/status', signal),
         getJSON<Summary>('/api/summary?' + filter, signal),
@@ -206,9 +219,11 @@ onMounted(() => {
     void refresh()
   }, 5000)
   window.addEventListener('resize', resize)
+  window.addEventListener('pointerdown', closeProxyMenu)
 })
 onBeforeUnmount(() => {
   window.clearInterval(timer); window.clearTimeout(appDebounce); window.clearTimeout(domainDebounce)
+  window.removeEventListener('pointerdown', closeProxyMenu)
   window.removeEventListener('resize', resize); controller?.abort(); chart?.dispose()
 })
 </script>
@@ -220,12 +235,27 @@ onBeforeUnmount(() => {
       <span class="status" :class="{ online: status.connected && !status.paused, paused: status.paused }"><i></i>{{ status.paused ? '已暂停' : status.connected ? '采集中' : '未连接' }} · {{ updatedAt }}</span>
     </header>
     <section v-if="status.last_error && !status.connected" class="warning">无法连接 Clash Verge Rev：{{ status.last_error }}</section>
-    <nav class="tabs" aria-label="页面切换"><button :class="{ selected: view === 'overview' }" @click="view = 'overview'">流量统计</button><button :class="{ selected: view === 'connections' }" @click="view = 'connections'">连接查询</button></nav>
+    <div class="view-toolbar">
+      <nav class="tabs" aria-label="页面切换"><button :class="{ selected: view === 'overview' }" @click="view = 'overview'">流量统计</button><button :class="{ selected: view === 'connections' }" @click="view = 'connections'">连接查询</button></nav>
+      <div ref="proxyMenu" class="proxy-filter" @keydown.esc="proxyMenuOpen = false">
+        <button type="button" :aria-expanded="proxyMenuOpen" aria-controls="proxy-options" @click="proxyMenuOpen = !proxyMenuOpen">代理组 / 出口：{{ selectedProxies.length ? `已选 ${selectedProxies.length} 项` : '全部' }} ▾</button>
+        <div v-if="proxyMenuOpen" id="proxy-options" class="proxy-menu">
+          <div class="proxy-menu-heading"><strong>筛选代理组 / 出口</strong><button type="button" @click="clearProxies">恢复全部</button></div>
+          <p class="hint">多选匹配任一项；不选表示全部。流量及连接数按当前时间、应用和域名条件统计。</p>
+          <div class="proxy-options" role="group" aria-label="代理组 / 出口">
+            <label v-for="item in availableProxies" :key="item.name"><input type="checkbox" :checked="selectedProxies.includes(item.name)" @change="toggleProxy(item.name)"><span class="proxy-option-name">{{ proxyName(item.name) }}<small>{{ item.connections }} 个连接</small></span><span class="proxy-option-traffic">{{ bytes(item.upload + item.download) }}</span></label>
+            <p v-if="!availableProxies.length" class="hint">暂无已记录的代理组 / 出口</p>
+          </div>
+          <p class="hint">升级前汇总归为“未记录”，原有连接明细仍可按已保存出口筛选。</p>
+        </div>
+      </div>
+    </div>
     <section v-if="error" class="warning" role="alert">{{ error }}</section>
     <div class="filter-summary">
       <span>统计时间：{{ dateTime(effectiveTime.from) }} — {{ dateTime(effectiveTime.to) }}（不含）</span>
       <span>应用：{{ selectedApps.length ? `已选 ${selectedApps.length} 项` : appliedAppSearch ? `包含“${appliedAppSearch}”` : '全部' }}</span>
       <span>域名：{{ selectedDomains.length ? `已选 ${selectedDomains.length} 项` : appliedDomainSearch ? `包含“${appliedDomainSearch}”` : '全部' }}</span>
+      <span v-if="selectedProxies.length" :title="selectedProxies.map(proxyName).join('、')">代理组 / 出口：{{ selectedProxies.map(proxyName).join('、') }}</span>
       <button v-if="selectedTime" @click="clearTime">清除框选</button><button v-if="selectedApps.length" @click="clearSelection('app')">清除应用选择</button><button v-if="selectedDomains.length" @click="clearSelection('domain')">清除域名选择</button>
       <span class="loading-label" role="status">{{ loading ? '正在更新…' : '' }}</span>
     </div>

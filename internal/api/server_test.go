@@ -131,3 +131,40 @@ func TestSeriesBucketAPI(t *testing.T) {
 		t.Fatalf("invalid bucket: %s", w.Body.String())
 	}
 }
+
+func TestProxySelectionAndOptions(t *testing.T) {
+	w := httptest.NewRecorder()
+	_, f, ok := queryFilter(w, httptest.NewRequest("GET", "/api/summary?from=60&to=180&proxy_selected=Group&proxy_selected=DIRECT&proxy_selected=&proxy_selected=Group", nil))
+	if !ok || len(f.Proxies) != 3 || f.Proxies[2] != "" {
+		t.Fatalf("filter: %+v %s", f, w.Body.String())
+	}
+	db, err := store.Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().Truncate(time.Minute)
+	if err := db.Record(context.Background(), []store.Delta{{At: now, Connection: "a", App: "app", Domain: "site", Proxy: "Group", Download: 10}, {At: now, Connection: "b", App: "app", Domain: "site", Proxy: "DIRECT", Download: 20}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(db, collector.New(nil, db), fstest.MapFS{}).Handler()
+	for _, endpoint := range []string{"summary", "series", "top/apps?page=1&", "top/domains?page=1&", "connections?page=1&"} {
+		url := "/api/" + endpoint
+		if endpoint == "summary" || endpoint == "series" {
+			url += "?"
+		}
+		url += fmt.Sprintf("from=%d&to=%d&proxy_selected=Group", now.Unix(), now.Add(time.Minute).Unix())
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest("GET", url, nil))
+		if w.Code != 200 {
+			t.Fatalf("%s: %d %s", url, w.Code, w.Body.String())
+		}
+	}
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/api/proxies", nil))
+	var options []store.RankedItem
+	_ = json.Unmarshal(w.Body.Bytes(), &options)
+	if w.Code != 200 || len(options) != 2 || options[0].Name != "DIRECT" || options[0].Download != 20 {
+		t.Fatalf("options: %s", w.Body.String())
+	}
+}
