@@ -7,6 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import RankingList from './RankingList.vue'
 import { brushRange, chartBucket, filterQuery, rankingQuery, toggleSelection, trafficAxis, type Range } from './filters'
 import type { RankedItem, RankedPage } from './types'
+import { loadPreferences, presetRange, savePreferences } from './preferences'
 
 echarts.use([LineChart, BrushComponent, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
@@ -18,10 +19,10 @@ type Event = { connection_id: string; time: number; app: string; domain: string;
 type EventPage = { items: Event[]; total: number; page: number; page_size: number }
 const view = ref<'overview' | 'connections'>('overview')
 const presets = [{ hours: 1, label: '1h' }, { hours: 24, label: '24h' }, { hours: 168, label: '7d' }, { hours: 720, label: '30d' }, { hours: 0, label: '自定义' }]
-const preset = ref(24)
-function presetRange(hours: number): Range { const to = Math.floor(Date.now() / 60000) * 60 + 60; return { from: to - hours * 3600, to } }
-const bounds = ref<Range>(presetRange(24))
-const selectedTime = ref<Range | null>(null)
+const restored = loadPreferences()
+const preset = ref(restored.preset)
+const bounds = ref<Range>(restored.bounds)
+const selectedTime = ref<Range | null>(restored.selectedTime)
 const bucket = computed(() => chartBucket(bounds.value))
 const bucketLabel = computed(() => bucket.value < 60 ? `${bucket.value} 分钟` : bucket.value < 1440 ? `${bucket.value / 60} 小时` : `${bucket.value / 1440} 天`)
 const effectiveTime = computed(() => selectedTime.value || bounds.value)
@@ -34,7 +35,7 @@ const appliedAppSearch = ref('')
 const appliedDomainSearch = ref('')
 const selectedApps = ref<string[]>([])
 const selectedDomains = ref<string[]>([])
-const selectedProxies = ref<string[]>([])
+const selectedProxies = ref<string[]>(restored.proxies)
 const proxyOptions = ref<RankedItem[]>([])
 const proxyMenu = ref<HTMLElement>()
 const proxyMenuOpen = ref(false)
@@ -208,6 +209,9 @@ watch(domainSearch, value => {
   domainDebounce = window.setTimeout(() => { appliedDomainSearch.value = value.trim(); domains.value.page = 1; if (!selectedDomains.value.length) apps.value.page = 1; page.value = 1; void refresh() }, 300)
 })
 watch(view, () => { page.value = 1; void refresh() })
+watch([preset, bounds, selectedTime, selectedProxies], () => {
+  savePreferences({ preset: preset.value, bounds: bounds.value, selectedTime: selectedTime.value, proxies: selectedProxies.value })
+})
 onMounted(() => {
   void refresh()
   timer = window.setInterval(() => {

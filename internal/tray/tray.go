@@ -55,6 +55,9 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	})
 	menu.AddSeparator()
+	if err := platform.RefreshStartupCommand(a.executable, a.configPath); err != nil {
+		slog.Warn("refresh startup command", "error", err)
+	}
 	startupEnabled, err := platform.StartupEnabled()
 	if err != nil {
 		slog.Warn("read startup setting", "error", err)

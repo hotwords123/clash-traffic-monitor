@@ -61,7 +61,7 @@ func SetStartup(enabled bool, executable, configPath string) error {
 }
 
 func startupCommand(executable, configPath string) string {
-	return quoteWindowsArgument(executable) + " -config " + quoteWindowsArgument(configPath)
+	return legacyStartupCommand(executable, configPath) + " -background"
 }
 
 func quoteWindowsArgument(value string) string {
@@ -69,4 +69,35 @@ func quoteWindowsArgument(value string) string {
 		return value
 	}
 	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+}
+
+func legacyStartupCommand(executable, configPath string) string {
+	return quoteWindowsArgument(executable) + " -config " + quoteWindowsArgument(configPath)
+}
+
+// Upgrade only this instance's known old commands; never enable startup or replace another instance.
+func RefreshStartupCommand(executable, configPath string) error {
+	key, err := registry.OpenKey(registry.CURRENT_USER, runKeyPath, registry.QUERY_VALUE|registry.SET_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open startup registry key: %w", err)
+	}
+	defer key.Close()
+	command, _, err := key.GetStringValue(runValue)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read startup registry value: %w", err)
+	}
+	legacy := legacyStartupCommand(executable, configPath)
+	if command != legacy && command != legacy+" -no-open-browser" {
+		return nil
+	}
+	if err := key.SetStringValue(runValue, startupCommand(executable, configPath)); err != nil {
+		return fmt.Errorf("refresh startup registry value: %w", err)
+	}
+	return nil
 }

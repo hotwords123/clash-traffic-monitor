@@ -35,6 +35,7 @@ func run() error {
 	dpiError := platform.EnableDPIAwareness()
 	configPath := flag.String("config", "config.json", "配置文件路径")
 	noTray := flag.Bool("no-tray", false, "不显示托盘图标，用于控制台调试")
+	background := flag.Bool("background", false, "后台启动，不自动打开浏览器，仍可通过托盘打开面板")
 	flag.Parse()
 
 	absoluteConfigPath, err := filepath.Abs(*configPath)
@@ -103,8 +104,10 @@ func run() error {
 			stop()
 			runError = fmt.Errorf("create tray: %w", err)
 		} else {
-			if err := platform.OpenURL(dashboardURL); err != nil {
-				slog.Warn("open dashboard on startup", "error", err)
+			if !*background {
+				if err := platform.OpenURL(dashboardURL); err != nil {
+					slog.Warn("open dashboard on startup", "error", err)
+				}
 			}
 			if err := tray.Run(ctx); err != nil {
 				stop()
